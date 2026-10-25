@@ -15,9 +15,30 @@ This document outlines the step-by-step procedures to deploy the **Gulf Taxis Di
 
 ---
 
-## 2. Option A: Deployment on Hostinger VPS or Linux VPS (Recommended)
+## 2. Option A: Deployment on Hostinger Business Web Hosting (hPanel Node.js App)
 
-Hostinger Business Web Hosting provides VPS plans running Ubuntu 22.04 / 24.04 LTS with Node.js and PM2.
+Hostinger Business Web Hosting includes the **Node.js Application Manager** in hPanel.
+
+### Configuration Settings in Hostinger hPanel:
+1. Go to **hPanel** -> **Websites** -> Select your domain -> **Node.js**.
+2. Set the following fields:
+   - **Node.js Version**: `22.x` (or `20.x`)
+   - **Application Mode**: `Production`
+   - **Application Root**: `domains/yourdomain.com/public_html` (or your subdirectory)
+   - **Application Startup File (Entry File)**: `server.js` (✅ matches production `server.js`)
+3. Under **Environment Variables**, add:
+   - `PORT`: (Hostinger usually assigns this automatically, or use `3000`)
+   - `NODE_ENV`: `production`
+   - `JWT_SECRET`: `your_random_64_character_secure_jwt_secret`
+   - `TZ`: `Asia/Riyadh`
+4. Under **Run npm script**:
+   - Run `npm install`
+   - Run `npm run build` (builds the Vite frontend into `/dist` and updates `server.js`)
+5. Click **Restart Application** in hPanel.
+
+---
+
+## 3. Option B: Deployment on Hostinger VPS or Linux VPS (with PM2)
 
 ### Step 1: Connect to your VPS via SSH
 ```bash
@@ -26,7 +47,7 @@ ssh root@your_server_ip
 
 ### Step 2: Install Node.js (v20 or v22 LTS) and PM2
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs git nginx
 sudo npm install -g pm2
 ```
@@ -34,7 +55,7 @@ sudo npm install -g pm2
 ### Step 3: Clone or Upload the Gulf Taxis System
 ```bash
 cd /var/www
-git clone <your-private-repo-url> gulf-taxis
+git clone <your-repo-url> gulf-taxis
 cd gulf-taxis
 ```
 
@@ -53,7 +74,9 @@ npm run build
 
 ### Step 6: Start with PM2 Process Manager
 ```bash
-pm2 start server.ts --interpreter ./node_modules/.bin/tsx --name "gulf-taxis"
+pm2 start server.js --name "gulf-taxis"
+# Or using ecosystem config:
+pm2 start ecosystem.config.cjs --env production
 pm2 save
 pm2 startup
 ```
@@ -88,7 +111,7 @@ certbot --nginx -d dispatch.gulftaxis.com
 
 ---
 
-## 3. Option B: Deployment on Railway
+## 4. Option C: Deployment on Railway
 
 1. Link your GitHub repository in Railway dashboard.
 2. Under **Variables**, add:
@@ -96,12 +119,12 @@ certbot --nginx -d dispatch.gulftaxis.com
    - `NODE_ENV=production`
    - `JWT_SECRET=<your-secret>`
 3. Set the build command to: `npm run build`
-4. Set the start command to: `npm start` (or `tsx server.ts`)
+4. Set the start command to: `npm start`
 5. Attach a Railway persistent volume to `/var/www/data` or `./data` to retain the SQLite file across deployments.
 
 ---
 
-## 4. Default Seed Administrator Credentials
+## 5. Default Seed Administrator Credentials
 
 Upon first startup, the database is automatically provisioned with the following accounts:
 
@@ -118,7 +141,7 @@ Upon first startup, the database is automatically provisioned with the following
 
 ---
 
-## 5. Automated Backups & Disaster Recovery
+## 6. Automated Backups & Disaster Recovery
 
 - Backups are generated automatically every 6 hours and stored in `./data/backups/`.
 - Administrators can trigger an on-demand snapshot via the **Settings > Backup & Recovery** interface.

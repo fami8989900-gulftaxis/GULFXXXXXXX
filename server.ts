@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -50,7 +51,9 @@ app.get('/api/health', (req, res) => {
     system: 'Gulf Taxis Dispatch Cloud System',
     timestamp: new Date().toISOString(),
     database: 'connected',
-    timezone: 'Asia/Riyadh',
+    timezone: process.env.TZ || 'Asia/Riyadh',
+    node_version: process.version,
+    environment: process.env.NODE_ENV || 'production',
   });
 });
 
@@ -96,22 +99,58 @@ async function performAutomatedBackup() {
 }
 setInterval(performAutomatedBackup, BACKUP_INTERVAL_MS);
 
+// API 404 handler for undefined API endpoints
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route ${req.method} ${req.originalUrl} not found` });
+});
+
 // Vite middleware or static dist
-const isProduction = process.env.NODE_ENV === 'production';
+const distPath = path.resolve(process.cwd(), 'dist');
+const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+const isProduction = process.env.NODE_ENV === 'production' || hasDist;
 
 if (!isProduction) {
-  const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  });
-  app.use(vite.middlewares);
+  try {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } catch (err) {
+    console.warn('[Gulf Taxis] Vite dev middleware not available, falling back to static files.');
+    if (hasDist) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
+  }
 } else {
-  const distPath = path.resolve(process.cwd(), 'dist');
-  app.use(express.static(distPath));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
+  if (hasDist) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
+    app.get('*', (req, res) => {
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <title>Gulf Taxis Dispatch Cloud</title>
+        </head>
+        <body style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;">
+          <h2>🚖 Gulf Taxis Dispatch Cloud Server Active</h2>
+          <p>The backend API and database are online. Frontend assets need to be built.</p>
+          <p>Please run <code>npm run build</code> to generate the production frontend.</p>
+          <p><a href="/api/health" style="color: #38bdf8;">Check API Health Status</a></p>
+        </body>
+        </html>
+      `);
+    });
+  }
 }
 
 app.listen(PORT, '0.0.0.0', () => {

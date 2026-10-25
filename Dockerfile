@@ -22,13 +22,13 @@ ENV PORT=3000
 
 # Install production dependencies
 COPY package*.json ./
-RUN npm install --omit=dev && npm install tsx typescript
+RUN npm install --omit=dev
 
 # Copy built application and server code
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server ./server
+COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/server ./server
 COPY --from=builder /app/.env.example ./.env.example
 COPY --from=builder /app/public ./public
 
@@ -39,4 +39,4 @@ EXPOSE 3000
 
 VOLUME ["/app/data"]
 
-CMD ["npx", "tsx", "server.ts"]
+CMD ["node", "server.js"]

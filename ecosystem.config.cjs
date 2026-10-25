@@ -2,8 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'gulf-taxis-dispatch',
-      script: 'server.ts',
-      interpreter: './node_modules/.bin/tsx',
+      script: 'server.js',
       instances: 1,
       autorestart: true,
       watch: false,
