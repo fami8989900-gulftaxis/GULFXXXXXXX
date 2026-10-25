@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && npm run build:server",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=server.js",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=server.mjs",
     "preview": "vite preview",
-    "start": "node server.js",
-    "clean": "rm -rf dist server.js",
+    "start": "node server.cjs",
+    "clean": "rm -rf dist server.mjs",
     "lint": "tsc --noEmit",
     "test": "tsx tests/system_audit_tests.ts"
   },
