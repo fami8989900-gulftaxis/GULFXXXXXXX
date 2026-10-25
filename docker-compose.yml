@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  gulf-taxis-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gulf_taxis_dispatch_cloud
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - JWT_SECRET=change_this_to_a_secure_random_production_secret_key_32chars
+      - TZ=Asia/Riyadh
+    volumes:
+      - gulf_taxis_data:/app/data
+
+volumes:
+  gulf_taxis_data:
+    driver: local

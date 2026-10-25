@@ -1,0 +1,6 @@
+{
+  "name": "Gulf Taxis Dispatch Cloud System",
+  "description": "Professional web-based, multi-device transport booking and dispatch cloud management system for Gulf Taxis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

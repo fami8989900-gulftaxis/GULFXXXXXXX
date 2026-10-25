@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-family-base: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-size-page-title: 26px;
+    --font-size-section: 19px;
+    --font-size-widget-val: 30px;
+    --font-size-widget-title: 14.5px;
+    --font-size-table-th: 13.5px;
+    --font-size-table: 14px;
+    --font-size-label: 14px;
+    --font-size-input: 14px;
+    --font-size-btn: 14px;
+    --font-size-badge: 12.5px;
+    --font-size-secondary: 12.5px;
+    --font-size-meta: 12px;
+  }
+
+  html, body {
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-table);
+    background-color: #f8fafc;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.011em;
+    line-height: 1.5;
+  }
+
+  /* Universal typography standards per prompt */
+  button, input, select, textarea {
+    font-family: inherit;
+    font-size: var(--font-size-input);
+  }
+}
+
+/* Typography Hierarchy Guidelines per Gulf Taxis Design System */
+.app-heading-1 {
+  font-size: var(--font-size-page-title);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+  color: #0f172a;
+}
+
+.app-heading-2 {
+  font-size: var(--font-size-section);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+  color: #1e293b;
+}
+
+.app-kpi-value {
+  font-size: var(--font-size-widget-val);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.app-kpi-title {
+  font-size: var(--font-size-widget-title);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.app-th {
+  font-size: var(--font-size-table-th);
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.app-td {
+  font-size: var(--font-size-table);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.app-label {
+  font-size: var(--font-size-label);
+  font-weight: 600;
+  color: #334155;
+}
+
+.app-input {
+  font-size: var(--font-size-input);
+  font-weight: 400;
+  min-height: 38px;
+}
+
+.app-btn {
+  font-size: var(--font-size-btn);
+  font-weight: 600;
+  min-height: 38px;
+}
+
+.app-badge {
+  font-size: var(--font-size-badge);
+  font-weight: 600;
+}
+
+.app-secondary {
+  font-size: var(--font-size-secondary);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.app-sidebar-item {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+/* Custom Scrollbar for sleek desktop feel */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+/* Premium SaaS Card Hover Lift */
+.saas-card-lift {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+.saas-card-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -10px rgba(11, 19, 43, 0.12), 0 4px 6px -2px rgba(11, 19, 43, 0.05);
+}
+
+/* Subtle Gold Text & Border Gradient */
+.gold-gradient-text {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 50%, #b45309 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Print utilities */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
