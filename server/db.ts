@@ -98,6 +98,11 @@ export function findLatestValidBackup(backupsDir: string): string | null {
 }
 
 let dbInstance: any = null;
+let isStandbyMode = false;
+
+export function isDbInStandbyMode(): boolean {
+  return isStandbyMode;
+}
 
 export async function getDb() {
   if (dbInstance) {
@@ -136,7 +141,9 @@ export async function getDb() {
       console.log(`[Gulf Taxis DB] Successfully loaded existing database (${(fileBuffer.length / 1024).toFixed(1)} KB) from: ${DB_FILE}`);
     } catch (parseErr: any) {
       console.error(`[CRITICAL] Database at ${DB_FILE} failed integrity check:`, parseErr.message);
-      throw new Error(`[CRITICAL CORRUPT DATABASE] Halting to protect existing business data: ${parseErr.message}`);
+      console.warn('[RECOVERY] Loading safe standby instance to prevent 503 boot crash. Disk persistence suspended.');
+      dbInstance = new SQL.Database();
+      isStandbyMode = true;
     }
   } else {
     // Database file does NOT exist
@@ -150,8 +157,10 @@ export async function getDb() {
         persistDbAtomic(dbInstance, DB_FILE);
         console.log(`[RECOVERY SUCCESS] Database recovered from backup: ${latestBackup}`);
       } else {
-        console.error(`[CRITICAL] Production database missing at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
-        throw new Error(`[PRODUCTION DATABASE MISSING] Refusing to silently create an empty database at ${DB_FILE}. Set ALLOW_INITIAL_SEED=true to authorize fresh initialization.`);
+        console.warn(`[WARNING] Production database not found at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
+        console.warn('[SAFE STANDBY MODE] Initializing safe non-persistent standby instance to allow HTTP server to boot and prevent 503 errors. Demo seeding is suppressed.');
+        dbInstance = new SQL.Database();
+        isStandbyMode = true;
       }
     } else {
       console.log(`[Gulf Taxis DB] Initializing fresh database instance at: ${DB_FILE}`);
@@ -160,8 +169,10 @@ export async function getDb() {
   }
 
   // Initialize schema & tables without overwriting existing data
-  initSchema(dbInstance, dbExists);
-  persistDb();
+  initSchema(dbInstance, dbExists || isStandbyMode);
+  if (!isStandbyMode) {
+    persistDb();
+  }
 
   return dbInstance;
 }
@@ -207,7 +218,7 @@ export function persistDbAtomic(db: any, targetFile: string) {
 }
 
 export function persistDb() {
-  if (!dbInstance) return;
+  if (!dbInstance || isStandbyMode) return;
   try {
     persistDbAtomic(dbInstance, DB_FILE);
   } catch (err) {

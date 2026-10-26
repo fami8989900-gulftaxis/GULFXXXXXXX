@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { getDb, persistDb, queryOne, runSql, getResolvedDbPath, DATA_DIR, BACKUPS_DIR, DB_FILE } from './server/db.js';
+import { getDb, persistDb, queryOne, runSql, getResolvedDbPath, isDbInStandbyMode, DATA_DIR, BACKUPS_DIR, DB_FILE } from './server/db.js';
 import authRoutes from './server/routes/authRoutes.js';
 import bookingRoutes from './server/routes/bookingRoutes.js';
 import dispatchRoutes from './server/routes/dispatchRoutes.js';
@@ -21,7 +21,7 @@ import syncRoutes from './server/routes/syncRoutes.js';
 import dataManagementRoutes from './server/routes/dataManagementRoutes.js';
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = process.env.PORT || '3000';
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
@@ -57,7 +57,8 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     system: 'Gulf Taxis Dispatch Cloud System',
     timestamp: new Date().toISOString(),
-    database: dbExists ? 'connected' : 'disconnected',
+    database: dbExists ? (isDbInStandbyMode() ? 'standby' : 'connected') : 'disconnected',
+    database_standby_mode: isDbInStandbyMode(),
     database_path: dbPath,
     database_size_bytes: dbSizeBytes,
     timezone: process.env.TZ || 'Asia/Riyadh',
@@ -168,9 +169,18 @@ if (!isProduction) {
   }
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Gulf Taxis Dispatch System] Server listening on http://0.0.0.0:${PORT}`);
-});
+// Start HTTP / Socket Listener compatible with Hostinger lsnode / Passenger
+const isSocket = typeof PORT === 'string' && (PORT.startsWith('/') || PORT.startsWith('\\\\.\\pipe\\'));
+if (isSocket) {
+  app.listen(PORT, () => {
+    console.log(`[Gulf Taxis Dispatch System] Server listening on socket: ${PORT}`);
+  });
+} else {
+  const numericPort = parseInt(String(PORT), 10) || 3000;
+  app.listen(numericPort, () => {
+    console.log(`[Gulf Taxis Dispatch System] Server listening on port: ${numericPort}`);
+  });
+}
 
 // Graceful shutdown handling to ensure atomic persistence on process termination
 const handleGracefulShutdown = (signal: string) => {

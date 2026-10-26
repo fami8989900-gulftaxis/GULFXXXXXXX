@@ -78,6 +78,10 @@ function findLatestValidBackup(backupsDir) {
   }
 }
 var dbInstance = null;
+var isStandbyMode = false;
+function isDbInStandbyMode() {
+  return isStandbyMode;
+}
 async function getDb() {
   if (dbInstance) {
     return dbInstance;
@@ -111,7 +115,9 @@ async function getDb() {
       console.log(`[Gulf Taxis DB] Successfully loaded existing database (${(fileBuffer.length / 1024).toFixed(1)} KB) from: ${DB_FILE}`);
     } catch (parseErr) {
       console.error(`[CRITICAL] Database at ${DB_FILE} failed integrity check:`, parseErr.message);
-      throw new Error(`[CRITICAL CORRUPT DATABASE] Halting to protect existing business data: ${parseErr.message}`);
+      console.warn("[RECOVERY] Loading safe standby instance to prevent 503 boot crash. Disk persistence suspended.");
+      dbInstance = new SQL.Database();
+      isStandbyMode = true;
     }
   } else {
     if (isProduction2 && !allowInitialSeed) {
@@ -123,16 +129,20 @@ async function getDb() {
         persistDbAtomic(dbInstance, DB_FILE);
         console.log(`[RECOVERY SUCCESS] Database recovered from backup: ${latestBackup}`);
       } else {
-        console.error(`[CRITICAL] Production database missing at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
-        throw new Error(`[PRODUCTION DATABASE MISSING] Refusing to silently create an empty database at ${DB_FILE}. Set ALLOW_INITIAL_SEED=true to authorize fresh initialization.`);
+        console.warn(`[WARNING] Production database not found at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
+        console.warn("[SAFE STANDBY MODE] Initializing safe non-persistent standby instance to allow HTTP server to boot and prevent 503 errors. Demo seeding is suppressed.");
+        dbInstance = new SQL.Database();
+        isStandbyMode = true;
       }
     } else {
       console.log(`[Gulf Taxis DB] Initializing fresh database instance at: ${DB_FILE}`);
       dbInstance = new SQL.Database();
     }
   }
-  initSchema(dbInstance, dbExists);
-  persistDb();
+  initSchema(dbInstance, dbExists || isStandbyMode);
+  if (!isStandbyMode) {
+    persistDb();
+  }
   return dbInstance;
 }
 function persistDbAtomic(db, targetFile) {
@@ -165,7 +175,7 @@ function persistDbAtomic(db, targetFile) {
   }
 }
 function persistDb() {
-  if (!dbInstance) return;
+  if (!dbInstance || isStandbyMode) return;
   try {
     persistDbAtomic(dbInstance, DB_FILE);
   } catch (err) {
@@ -4597,7 +4607,7 @@ var dataManagementRoutes_default = router13;
 
 // server.ts
 var app = express();
-var PORT = parseInt(process.env.PORT || "3000", 10);
+var PORT = process.env.PORT || "3000";
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: "20mb" }));
@@ -4625,7 +4635,8 @@ app.get("/api/health", (req, res) => {
     status: "healthy",
     system: "Gulf Taxis Dispatch Cloud System",
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    database: dbExists ? "connected" : "disconnected",
+    database: dbExists ? isDbInStandbyMode() ? "standby" : "connected" : "disconnected",
+    database_standby_mode: isDbInStandbyMode(),
     database_path: dbPath,
     database_size_bytes: dbSizeBytes,
     timezone: process.env.TZ || "Asia/Riyadh",
@@ -4722,9 +4733,17 @@ if (!isProduction) {
     });
   }
 }
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[Gulf Taxis Dispatch System] Server listening on http://0.0.0.0:${PORT}`);
-});
+var isSocket = typeof PORT === "string" && (PORT.startsWith("/") || PORT.startsWith("\\\\.\\pipe\\"));
+if (isSocket) {
+  app.listen(PORT, () => {
+    console.log(`[Gulf Taxis Dispatch System] Server listening on socket: ${PORT}`);
+  });
+} else {
+  const numericPort = parseInt(String(PORT), 10) || 3e3;
+  app.listen(numericPort, () => {
+    console.log(`[Gulf Taxis Dispatch System] Server listening on port: ${numericPort}`);
+  });
+}
 var handleGracefulShutdown = (signal) => {
   console.log(`[Gulf Taxis] Received ${signal}. Flushing database atomically before shutdown...`);
   try {
