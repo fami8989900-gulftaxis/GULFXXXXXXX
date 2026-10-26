@@ -3,16 +3,98 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'gulf_taxis.sqlite');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+/**
+ * Resolves the persistent database directory and database file path.
+ * 
+ * Order of precedence:
+ * 1. Explicit DB_PATH / GULF_TAXIS_DB_PATH environment variable
+ * 2. Explicit DATA_DIR / GULF_TAXIS_DATA_DIR environment variable
+ * 3. Hostinger Persistent Shared Directory auto-discovery
+ * 4. Default local directory (<app_root>/data)
+ */
+export function resolveDatabasePaths(): { dataDir: string; dbFile: string; backupsDir: string } {
+  // 1. Explicit DB_PATH override
+  const envDbFile = process.env.GULF_TAXIS_DB_PATH || process.env.DB_PATH;
+  if (envDbFile) {
+    const resolvedDbFile = path.resolve(envDbFile);
+    const resolvedDataDir = path.dirname(resolvedDbFile);
+    const resolvedBackupsDir = path.join(resolvedDataDir, 'backups');
+    return { dataDir: resolvedDataDir, dbFile: resolvedDbFile, backupsDir: resolvedBackupsDir };
+  }
 
-// Ensure directories exist
+  // 2. Explicit DATA_DIR override
+  const envDataDir = process.env.GULF_TAXIS_DATA_DIR || process.env.DATA_DIR;
+  if (envDataDir) {
+    const resolvedDataDir = path.resolve(envDataDir);
+    const resolvedDbFile = path.join(resolvedDataDir, 'gulf_taxis.sqlite');
+    const resolvedBackupsDir = path.join(resolvedDataDir, 'backups');
+    return { dataDir: resolvedDataDir, dbFile: resolvedDbFile, backupsDir: resolvedBackupsDir };
+  }
+
+  const cwd = process.cwd();
+
+  // 3. Hostinger / Cloud build directory auto-discovery
+  // If running inside versioned build folders (e.g. hbuilds/.../nodejs or releases/)
+  const isHostingerBuild = cwd.includes('hbuilds') || cwd.includes('/builds/') || cwd.includes('/releases/');
+  if (isHostingerBuild) {
+    const candidates = [
+      path.resolve(cwd, '../../gulf_taxis_data/gulf_taxis.sqlite'),
+      path.resolve(cwd, '../../../gulf_taxis_data/gulf_taxis.sqlite'),
+      path.resolve(cwd, '../current/nodejs/data/gulf_taxis.sqlite'),
+      path.resolve(cwd, '../../current/nodejs/data/gulf_taxis.sqlite'),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        console.log(`[Gulf Taxis DB] Auto-discovered persistent database at: ${candidate}`);
+        const resolvedDataDir = path.dirname(candidate);
+        const resolvedBackupsDir = path.join(resolvedDataDir, 'backups');
+        return { dataDir: resolvedDataDir, dbFile: candidate, backupsDir: resolvedBackupsDir };
+      }
+    }
+  }
+
+  // 4. Standard default local path
+  const defaultDataDir = path.resolve(cwd, 'data');
+  const defaultDbFile = path.join(defaultDataDir, 'gulf_taxis.sqlite');
+  const defaultBackupsDir = path.join(defaultDataDir, 'backups');
+  return { dataDir: defaultDataDir, dbFile: defaultDbFile, backupsDir: defaultBackupsDir };
+}
+
+const { dataDir: initialDataDir, dbFile: initialDbFile, backupsDir: initialBackupsDir } = resolveDatabasePaths();
+export const DATA_DIR = initialDataDir;
+export const DB_FILE = initialDbFile;
+export const BACKUPS_DIR = initialBackupsDir;
+
+// Ensure persistent directories exist
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 if (!fs.existsSync(BACKUPS_DIR)) {
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+}
+
+export function getResolvedDbPath(): string {
+  return DB_FILE;
+}
+
+export function findLatestValidBackup(backupsDir: string): string | null {
+  if (!fs.existsSync(backupsDir)) return null;
+  try {
+    const files = fs.readdirSync(backupsDir)
+      .filter((f) => f.endsWith('.sqlite'))
+      .map((f) => path.join(backupsDir, f))
+      .sort((a, b) => {
+        try {
+          return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+        } catch {
+          return 0;
+        }
+      });
+    return files.length > 0 ? files[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 let dbInstance: any = null;
@@ -23,32 +105,111 @@ export async function getDb() {
   }
 
   const SQL = await initSqlJs();
+  const dbExists = fs.existsSync(DB_FILE);
+  const isProduction = process.env.NODE_ENV === 'production';
+  const allowInitialSeed = process.env.ALLOW_INITIAL_SEED === 'true';
 
-  if (fs.existsSync(DB_FILE)) {
+  if (dbExists) {
+    let fileBuffer: Buffer;
     try {
-      const fileBuffer = fs.readFileSync(DB_FILE);
+      fileBuffer = fs.readFileSync(DB_FILE);
+      if (fileBuffer.length === 0) {
+        throw new Error(`Database file at ${DB_FILE} is 0 bytes (empty/truncated).`);
+      }
+    } catch (readErr: any) {
+      console.error(`[CRITICAL] Cannot read existing database file at ${DB_FILE}:`, readErr.message);
+      const latestBackup = findLatestValidBackup(BACKUPS_DIR);
+      if (latestBackup) {
+        console.warn(`[RECOVERY ALERT] Valid backup snapshot available at: ${latestBackup}. Halting to prevent data overwrite.`);
+      }
+      throw new Error(`[CRITICAL DATABASE READ FAILURE] Cannot read database at ${DB_FILE}: ${readErr.message}`);
+    }
+
+    try {
       dbInstance = new SQL.Database(fileBuffer);
-    } catch (err) {
-      console.error('Failed to read existing database file, creating a new one:', err);
-      dbInstance = new SQL.Database();
+      // Run non-destructive integrity check
+      const checkRes = dbInstance.exec('PRAGMA integrity_check;');
+      const integrity = checkRes[0]?.values[0]?.[0];
+      if (integrity !== 'ok') {
+        throw new Error(`PRAGMA integrity_check reported: ${integrity}`);
+      }
+      console.log(`[Gulf Taxis DB] Successfully loaded existing database (${(fileBuffer.length / 1024).toFixed(1)} KB) from: ${DB_FILE}`);
+    } catch (parseErr: any) {
+      console.error(`[CRITICAL] Database at ${DB_FILE} failed integrity check:`, parseErr.message);
+      throw new Error(`[CRITICAL CORRUPT DATABASE] Halting to protect existing business data: ${parseErr.message}`);
     }
   } else {
-    dbInstance = new SQL.Database();
+    // Database file does NOT exist
+    if (isProduction && !allowInitialSeed) {
+      // Check if backups exist to auto-adopt
+      const latestBackup = findLatestValidBackup(BACKUPS_DIR);
+      if (latestBackup) {
+        console.warn(`[RECOVERY] Active database not found at ${DB_FILE}, but valid backup exists at ${latestBackup}. Adopting backup snapshot...`);
+        const backupData = fs.readFileSync(latestBackup);
+        dbInstance = new SQL.Database(backupData);
+        persistDbAtomic(dbInstance, DB_FILE);
+        console.log(`[RECOVERY SUCCESS] Database recovered from backup: ${latestBackup}`);
+      } else {
+        console.error(`[CRITICAL] Production database missing at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
+        throw new Error(`[PRODUCTION DATABASE MISSING] Refusing to silently create an empty database at ${DB_FILE}. Set ALLOW_INITIAL_SEED=true to authorize fresh initialization.`);
+      }
+    } else {
+      console.log(`[Gulf Taxis DB] Initializing fresh database instance at: ${DB_FILE}`);
+      dbInstance = new SQL.Database();
+    }
   }
 
-  // Initialize schema & tables
-  initSchema(dbInstance);
+  // Initialize schema & tables without overwriting existing data
+  initSchema(dbInstance, dbExists);
   persistDb();
 
   return dbInstance;
 }
 
+/**
+ * Persists the in-memory SQLite database to physical disk atomically.
+ * Prevents file corruption or truncation if server is terminated during write.
+ */
+export function persistDbAtomic(db: any, targetFile: string) {
+  if (!db) return;
+  const targetDir = path.dirname(targetFile);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  const tempFile = `${targetFile}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(tempFile, buffer);
+
+    // Flush OS disk buffer to physical storage
+    const fd = fs.openSync(tempFile, 'r+');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    // Atomic filesystem swap
+    fs.renameSync(tempFile, targetFile);
+  } catch (err: any) {
+    console.error(`[CRITICAL] Failed atomic database persistence to ${targetFile}:`, err);
+    if (fs.existsSync(tempFile)) {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {
+        // ignore
+      }
+    }
+    throw err;
+  }
+}
+
 export function persistDb() {
   if (!dbInstance) return;
   try {
-    const data = dbInstance.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_FILE, buffer);
+    persistDbAtomic(dbInstance, DB_FILE);
   } catch (err) {
     console.error('Failed to persist database to file:', err);
   }
@@ -104,7 +265,7 @@ export function queryOne<T = any>(sql: string, params: any[] = []): T | null {
   return all.length > 0 ? all[0] : null;
 }
 
-function initSchema(db: any) {
+function initSchema(db: any, wasExistingDb: boolean = false) {
   // Foreign keys enabled
   db.run('PRAGMA foreign_keys = ON;');
 
@@ -321,12 +482,17 @@ function initSchema(db: any) {
     );
   `);
 
-  // Check if default admin user exists, if not seed initial data
+  // Check if default admin user exists
   const adminCheck = db.exec("SELECT count(*) as count FROM users WHERE role = 'super_admin'");
   const adminCount = adminCheck[0]?.values[0]?.[0] || 0;
 
-  if (adminCount === 0) {
+  // STRICT RULE: Never seed default demo data into an existing database
+  // Only seed if this is an explicitly new database AND no admin exists
+  if (!wasExistingDb && adminCount === 0) {
+    console.log('[Gulf Taxis DB] Fresh database initialized. Seeding initial baseline accounts and configuration...');
     seedInitialData(db);
+  } else if (adminCount === 0) {
+    console.warn('[SECURITY WARNING] Pre-existing database has 0 super_admin users. Default demo seeding suppressed to prevent data overwrite.');
   }
 }
 

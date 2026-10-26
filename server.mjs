@@ -11,14 +11,71 @@ import initSqlJs from "sql.js";
 import fs from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
-var DATA_DIR = path.resolve(process.cwd(), "data");
-var DB_FILE = path.join(DATA_DIR, "gulf_taxis.sqlite");
-var BACKUPS_DIR = path.join(DATA_DIR, "backups");
+function resolveDatabasePaths() {
+  const envDbFile = process.env.GULF_TAXIS_DB_PATH || process.env.DB_PATH;
+  if (envDbFile) {
+    const resolvedDbFile = path.resolve(envDbFile);
+    const resolvedDataDir = path.dirname(resolvedDbFile);
+    const resolvedBackupsDir = path.join(resolvedDataDir, "backups");
+    return { dataDir: resolvedDataDir, dbFile: resolvedDbFile, backupsDir: resolvedBackupsDir };
+  }
+  const envDataDir = process.env.GULF_TAXIS_DATA_DIR || process.env.DATA_DIR;
+  if (envDataDir) {
+    const resolvedDataDir = path.resolve(envDataDir);
+    const resolvedDbFile = path.join(resolvedDataDir, "gulf_taxis.sqlite");
+    const resolvedBackupsDir = path.join(resolvedDataDir, "backups");
+    return { dataDir: resolvedDataDir, dbFile: resolvedDbFile, backupsDir: resolvedBackupsDir };
+  }
+  const cwd = process.cwd();
+  const isHostingerBuild = cwd.includes("hbuilds") || cwd.includes("/builds/") || cwd.includes("/releases/");
+  if (isHostingerBuild) {
+    const candidates = [
+      path.resolve(cwd, "../../gulf_taxis_data/gulf_taxis.sqlite"),
+      path.resolve(cwd, "../../../gulf_taxis_data/gulf_taxis.sqlite"),
+      path.resolve(cwd, "../current/nodejs/data/gulf_taxis.sqlite"),
+      path.resolve(cwd, "../../current/nodejs/data/gulf_taxis.sqlite")
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        console.log(`[Gulf Taxis DB] Auto-discovered persistent database at: ${candidate}`);
+        const resolvedDataDir = path.dirname(candidate);
+        const resolvedBackupsDir = path.join(resolvedDataDir, "backups");
+        return { dataDir: resolvedDataDir, dbFile: candidate, backupsDir: resolvedBackupsDir };
+      }
+    }
+  }
+  const defaultDataDir = path.resolve(cwd, "data");
+  const defaultDbFile = path.join(defaultDataDir, "gulf_taxis.sqlite");
+  const defaultBackupsDir = path.join(defaultDataDir, "backups");
+  return { dataDir: defaultDataDir, dbFile: defaultDbFile, backupsDir: defaultBackupsDir };
+}
+var { dataDir: initialDataDir, dbFile: initialDbFile, backupsDir: initialBackupsDir } = resolveDatabasePaths();
+var DATA_DIR = initialDataDir;
+var DB_FILE = initialDbFile;
+var BACKUPS_DIR = initialBackupsDir;
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 if (!fs.existsSync(BACKUPS_DIR)) {
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+}
+function getResolvedDbPath() {
+  return DB_FILE;
+}
+function findLatestValidBackup(backupsDir) {
+  if (!fs.existsSync(backupsDir)) return null;
+  try {
+    const files = fs.readdirSync(backupsDir).filter((f) => f.endsWith(".sqlite")).map((f) => path.join(backupsDir, f)).sort((a, b) => {
+      try {
+        return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+      } catch {
+        return 0;
+      }
+    });
+    return files.length > 0 ? files[0] : null;
+  } catch {
+    return null;
+  }
 }
 var dbInstance = null;
 async function getDb() {
@@ -26,27 +83,91 @@ async function getDb() {
     return dbInstance;
   }
   const SQL = await initSqlJs();
-  if (fs.existsSync(DB_FILE)) {
+  const dbExists = fs.existsSync(DB_FILE);
+  const isProduction2 = process.env.NODE_ENV === "production";
+  const allowInitialSeed = process.env.ALLOW_INITIAL_SEED === "true";
+  if (dbExists) {
+    let fileBuffer;
     try {
-      const fileBuffer = fs.readFileSync(DB_FILE);
+      fileBuffer = fs.readFileSync(DB_FILE);
+      if (fileBuffer.length === 0) {
+        throw new Error(`Database file at ${DB_FILE} is 0 bytes (empty/truncated).`);
+      }
+    } catch (readErr) {
+      console.error(`[CRITICAL] Cannot read existing database file at ${DB_FILE}:`, readErr.message);
+      const latestBackup = findLatestValidBackup(BACKUPS_DIR);
+      if (latestBackup) {
+        console.warn(`[RECOVERY ALERT] Valid backup snapshot available at: ${latestBackup}. Halting to prevent data overwrite.`);
+      }
+      throw new Error(`[CRITICAL DATABASE READ FAILURE] Cannot read database at ${DB_FILE}: ${readErr.message}`);
+    }
+    try {
       dbInstance = new SQL.Database(fileBuffer);
-    } catch (err) {
-      console.error("Failed to read existing database file, creating a new one:", err);
-      dbInstance = new SQL.Database();
+      const checkRes = dbInstance.exec("PRAGMA integrity_check;");
+      const integrity = checkRes[0]?.values[0]?.[0];
+      if (integrity !== "ok") {
+        throw new Error(`PRAGMA integrity_check reported: ${integrity}`);
+      }
+      console.log(`[Gulf Taxis DB] Successfully loaded existing database (${(fileBuffer.length / 1024).toFixed(1)} KB) from: ${DB_FILE}`);
+    } catch (parseErr) {
+      console.error(`[CRITICAL] Database at ${DB_FILE} failed integrity check:`, parseErr.message);
+      throw new Error(`[CRITICAL CORRUPT DATABASE] Halting to protect existing business data: ${parseErr.message}`);
     }
   } else {
-    dbInstance = new SQL.Database();
+    if (isProduction2 && !allowInitialSeed) {
+      const latestBackup = findLatestValidBackup(BACKUPS_DIR);
+      if (latestBackup) {
+        console.warn(`[RECOVERY] Active database not found at ${DB_FILE}, but valid backup exists at ${latestBackup}. Adopting backup snapshot...`);
+        const backupData = fs.readFileSync(latestBackup);
+        dbInstance = new SQL.Database(backupData);
+        persistDbAtomic(dbInstance, DB_FILE);
+        console.log(`[RECOVERY SUCCESS] Database recovered from backup: ${latestBackup}`);
+      } else {
+        console.error(`[CRITICAL] Production database missing at ${DB_FILE} and ALLOW_INITIAL_SEED is not set.`);
+        throw new Error(`[PRODUCTION DATABASE MISSING] Refusing to silently create an empty database at ${DB_FILE}. Set ALLOW_INITIAL_SEED=true to authorize fresh initialization.`);
+      }
+    } else {
+      console.log(`[Gulf Taxis DB] Initializing fresh database instance at: ${DB_FILE}`);
+      dbInstance = new SQL.Database();
+    }
   }
-  initSchema(dbInstance);
+  initSchema(dbInstance, dbExists);
   persistDb();
   return dbInstance;
+}
+function persistDbAtomic(db, targetFile) {
+  if (!db) return;
+  const targetDir = path.dirname(targetFile);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+  const tempFile = `${targetFile}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(tempFile, buffer);
+    const fd = fs.openSync(tempFile, "r+");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tempFile, targetFile);
+  } catch (err) {
+    console.error(`[CRITICAL] Failed atomic database persistence to ${targetFile}:`, err);
+    if (fs.existsSync(tempFile)) {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {
+      }
+    }
+    throw err;
+  }
 }
 function persistDb() {
   if (!dbInstance) return;
   try {
-    const data = dbInstance.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_FILE, buffer);
+    persistDbAtomic(dbInstance, DB_FILE);
   } catch (err) {
     console.error("Failed to persist database to file:", err);
   }
@@ -92,7 +213,7 @@ function queryOne(sql, params = []) {
   const all = queryAll(sql, params);
   return all.length > 0 ? all[0] : null;
 }
-function initSchema(db) {
+function initSchema(db, wasExistingDb = false) {
   db.run("PRAGMA foreign_keys = ON;");
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -284,8 +405,11 @@ function initSchema(db) {
   `);
   const adminCheck = db.exec("SELECT count(*) as count FROM users WHERE role = 'super_admin'");
   const adminCount = adminCheck[0]?.values[0]?.[0] || 0;
-  if (adminCount === 0) {
+  if (!wasExistingDb && adminCount === 0) {
+    console.log("[Gulf Taxis DB] Fresh database initialized. Seeding initial baseline accounts and configuration...");
     seedInitialData(db);
+  } else if (adminCount === 0) {
+    console.warn("[SECURITY WARNING] Pre-existing database has 0 super_admin users. Default demo seeding suppressed to prevent data overwrite.");
   }
 }
 function seedInitialData(db) {
@@ -3740,16 +3864,14 @@ import { Router as Router9 } from "express";
 import fs2 from "fs";
 import path2 from "path";
 var router9 = Router9();
-var DATA_DIR2 = path2.resolve(process.cwd(), "data");
-var BACKUPS_DIR2 = path2.join(DATA_DIR2, "backups");
 router9.get("/", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
   const backups = queryAll(`SELECT * FROM backups ORDER BY created_at DESC`);
   const diskBackups = [];
-  if (fs2.existsSync(BACKUPS_DIR2)) {
-    const files = fs2.readdirSync(BACKUPS_DIR2);
+  if (fs2.existsSync(BACKUPS_DIR)) {
+    const files = fs2.readdirSync(BACKUPS_DIR);
     for (const file of files) {
       if (file.endsWith(".sqlite")) {
-        const stats = fs2.statSync(path2.join(BACKUPS_DIR2, file));
+        const stats = fs2.statSync(path2.join(BACKUPS_DIR, file));
         diskBackups.push({
           filename: file,
           size_bytes: stats.size,
@@ -3772,7 +3894,7 @@ router9.post("/create", requireAuth, requireRole("super_admin", "admin"), async 
     persistDb();
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = `gulf_taxis_backup_${timestamp}.sqlite`;
-    const destPath = path2.join(BACKUPS_DIR2, filename);
+    const destPath = path2.join(BACKUPS_DIR, filename);
     const binaryData = db.export();
     const buffer = Buffer.from(binaryData);
     fs2.writeFileSync(destPath, buffer);
@@ -3807,7 +3929,7 @@ router9.post("/restore", requireAuth, requireRole("super_admin"), async (req, re
     return res.status(400).json({ error: "Backup filename is required." });
   }
   const safeFilename = path2.basename(filename);
-  const filePath = path2.join(BACKUPS_DIR2, safeFilename);
+  const filePath = path2.join(BACKUPS_DIR, safeFilename);
   if (!fs2.existsSync(filePath)) {
     return res.status(404).json({ error: "Specified backup file does not exist." });
   }
@@ -3815,7 +3937,7 @@ router9.post("/restore", requireAuth, requireRole("super_admin"), async (req, re
     const backupBuffer = fs2.readFileSync(filePath);
     const db = await getDb();
     const safetySnapshotName = `pre_restore_safety_${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.sqlite`;
-    fs2.writeFileSync(path2.join(BACKUPS_DIR2, safetySnapshotName), Buffer.from(db.export()));
+    fs2.writeFileSync(path2.join(BACKUPS_DIR, safetySnapshotName), Buffer.from(db.export()));
     const initSqlJs2 = (await import("sql.js")).default;
     const SQL = await initSqlJs2();
     const restoredDb = new SQL.Database(backupBuffer);
@@ -3823,7 +3945,7 @@ router9.post("/restore", requireAuth, requireRole("super_admin"), async (req, re
     if (!testResult || testResult.length === 0) {
       throw new Error("Backup file verification failed: users table not readable.");
     }
-    const mainDbFile = path2.join(DATA_DIR2, "gulf_taxis.sqlite");
+    const mainDbFile = DB_FILE;
     fs2.writeFileSync(mainDbFile, backupBuffer);
     setDbInstance(restoredDb);
     recordAuditLog(
@@ -4299,8 +4421,6 @@ import bcrypt4 from "bcryptjs";
 import fs3 from "fs";
 import path3 from "path";
 var router13 = Router13();
-var DATA_DIR3 = path3.resolve(process.cwd(), "data");
-var BACKUPS_DIR3 = path3.join(DATA_DIR3, "backups");
 router13.get("/summary", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
   try {
     const bookingsCount = queryOne("SELECT count(*) as count FROM bookings")?.count || 0;
@@ -4385,12 +4505,12 @@ router13.post("/fresh-start", requireAuth, requireRole("super_admin", "admin"), 
   try {
     const db = await getDb();
     persistDb();
-    if (!fs3.existsSync(BACKUPS_DIR3)) {
-      fs3.mkdirSync(BACKUPS_DIR3, { recursive: true });
+    if (!fs3.existsSync(BACKUPS_DIR)) {
+      fs3.mkdirSync(BACKUPS_DIR, { recursive: true });
     }
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     backupFilename = `fresh_start_safety_backup_${timestamp}.sqlite`;
-    const destPath = path3.join(BACKUPS_DIR3, backupFilename);
+    const destPath = path3.join(BACKUPS_DIR, backupFilename);
     const binaryData = db.export();
     const buffer = Buffer.from(binaryData);
     fs3.writeFileSync(destPath, buffer);
@@ -4483,6 +4603,7 @@ app.use(cookieParser());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 await getDb();
+console.log(`[Gulf Taxis] Connected to persistent database: ${getResolvedDbPath()}`);
 app.use("/api/auth", authRoutes_default);
 app.use("/api/bookings", bookingRoutes_default);
 app.use("/api/dispatch", dispatchRoutes_default);
@@ -4497,11 +4618,16 @@ app.use("/api/settings", settingsRoutes_default);
 app.use("/api/sync", syncRoutes_default);
 app.use("/api/data-management", dataManagementRoutes_default);
 app.get("/api/health", (req, res) => {
+  const dbPath = getResolvedDbPath();
+  const dbExists = fs4.existsSync(dbPath);
+  const dbSizeBytes = dbExists ? fs4.statSync(dbPath).size : 0;
   res.json({
     status: "healthy",
     system: "Gulf Taxis Dispatch Cloud System",
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    database: "connected",
+    database: dbExists ? "connected" : "disconnected",
+    database_path: dbPath,
+    database_size_bytes: dbSizeBytes,
     timezone: process.env.TZ || "Asia/Riyadh",
     node_version: process.version,
     environment: process.env.NODE_ENV || "production"
@@ -4523,7 +4649,7 @@ async function performAutomatedBackup() {
   try {
     const db = await getDb();
     persistDb();
-    const backupDir = path4.resolve(process.cwd(), "data", "backups");
+    const backupDir = BACKUPS_DIR;
     if (!fs4.existsSync(backupDir)) {
       fs4.mkdirSync(backupDir, { recursive: true });
     }
@@ -4599,3 +4725,15 @@ if (!isProduction) {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`[Gulf Taxis Dispatch System] Server listening on http://0.0.0.0:${PORT}`);
 });
+var handleGracefulShutdown = (signal) => {
+  console.log(`[Gulf Taxis] Received ${signal}. Flushing database atomically before shutdown...`);
+  try {
+    persistDb();
+    console.log("[Gulf Taxis] Database successfully saved.");
+  } catch (err) {
+    console.error("[Gulf Taxis] Error saving database during shutdown:", err);
+  }
+  process.exit(0);
+};
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));

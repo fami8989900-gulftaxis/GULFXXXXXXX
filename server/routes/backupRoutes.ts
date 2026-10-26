@@ -1,12 +1,10 @@
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { getDb, persistDb, setDbInstance, queryAll, queryOne, runSql } from '../db.js';
+import { getDb, persistDb, setDbInstance, queryAll, queryOne, runSql, DATA_DIR, BACKUPS_DIR, DB_FILE } from '../db.js';
 import { requireAuth, requireRole, recordAuditLog, AuthenticatedRequest } from '../auth.js';
 
 const router = Router();
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 
 // GET /api/backups
 router.get('/', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
@@ -114,8 +112,8 @@ router.post('/restore', requireAuth, requireRole('super_admin'), async (req: Aut
       throw new Error('Backup file verification failed: users table not readable.');
     }
 
-    // Overwrite main db file and reload in-memory dbInstance
-    const mainDbFile = path.join(DATA_DIR, 'gulf_taxis.sqlite');
+    // Update main db file and reload in-memory dbInstance
+    const mainDbFile = DB_FILE;
     fs.writeFileSync(mainDbFile, backupBuffer);
     setDbInstance(restoredDb);
 

@@ -2,12 +2,10 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
-import { getDb, persistDb, queryAll, queryOne, runSql, runTransaction } from '../db.js';
+import { getDb, persistDb, queryAll, queryOne, runSql, runTransaction, DATA_DIR, BACKUPS_DIR } from '../db.js';
 import { requireAuth, requireRole, recordAuditLog, AuthenticatedRequest } from '../auth.js';
 
 const router = Router();
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 
 // GET /api/data-management/summary
 router.get('/summary', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {

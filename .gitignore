@@ -7,7 +7,14 @@ coverage/
 .env*
 !.env.example
 
-# SQLite database files and automated snapshots
-data/*.sqlite
+# SQLite persistent databases, temp files, locks, and snapshots
+data/*.sqlite*
+data/*.db*
 data/backups/
 *.sqlite
+*.sqlite*
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.tmp*
+gulf_taxis_data/

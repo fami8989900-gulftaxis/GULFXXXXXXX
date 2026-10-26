@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { getDb, persistDb, queryOne, runSql } from './server/db.js';
+import { getDb, persistDb, queryOne, runSql, getResolvedDbPath, DATA_DIR, BACKUPS_DIR, DB_FILE } from './server/db.js';
 import authRoutes from './server/routes/authRoutes.js';
 import bookingRoutes from './server/routes/bookingRoutes.js';
 import dispatchRoutes from './server/routes/dispatchRoutes.js';
@@ -28,8 +28,9 @@ app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Initialize database
+// Initialize persistent database
 await getDb();
+console.log(`[Gulf Taxis] Connected to persistent database: ${getResolvedDbPath()}`);
 
 // Mount API routes
 app.use('/api/auth', authRoutes);
@@ -46,13 +47,19 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/data-management', dataManagementRoutes);
 
-// Health check endpoint
+// Health check endpoint with persistent database diagnostics
 app.get('/api/health', (req, res) => {
+  const dbPath = getResolvedDbPath();
+  const dbExists = fs.existsSync(dbPath);
+  const dbSizeBytes = dbExists ? fs.statSync(dbPath).size : 0;
+
   res.json({
     status: 'healthy',
     system: 'Gulf Taxis Dispatch Cloud System',
     timestamp: new Date().toISOString(),
-    database: 'connected',
+    database: dbExists ? 'connected' : 'disconnected',
+    database_path: dbPath,
+    database_size_bytes: dbSizeBytes,
     timezone: process.env.TZ || 'Asia/Riyadh',
     node_version: process.version,
     environment: process.env.NODE_ENV || 'production',
@@ -79,7 +86,7 @@ async function performAutomatedBackup() {
   try {
     const db = await getDb();
     persistDb();
-    const backupDir = path.resolve(process.cwd(), 'data', 'backups');
+    const backupDir = BACKUPS_DIR;
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir, { recursive: true });
     }
@@ -164,3 +171,18 @@ if (!isProduction) {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[Gulf Taxis Dispatch System] Server listening on http://0.0.0.0:${PORT}`);
 });
+
+// Graceful shutdown handling to ensure atomic persistence on process termination
+const handleGracefulShutdown = (signal: string) => {
+  console.log(`[Gulf Taxis] Received ${signal}. Flushing database atomically before shutdown...`);
+  try {
+    persistDb();
+    console.log('[Gulf Taxis] Database successfully saved.');
+  } catch (err) {
+    console.error('[Gulf Taxis] Error saving database during shutdown:', err);
+  }
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
