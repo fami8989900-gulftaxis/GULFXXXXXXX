@@ -13,8 +13,12 @@ router.get('/', requireAuth, requirePermission('drivers'), (req: AuthenticatedRe
       d.*,
       v.reg_number as vehicle_reg,
       v.make_model as vehicle_model,
+      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id) as total_bookings_count,
       (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status = 'Trip Completed') as completed_trips_count,
-      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status NOT IN ('Trip Completed', 'Cancelled', 'No Show')) as active_trips_count
+      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status NOT IN ('Trip Completed', 'Cancelled', 'No Show')) as active_trips_count,
+      (SELECT COUNT(*) FROM payments WHERE entity_type = 'driver_payment' AND entity_id = d.id) as payments_count,
+      ((SELECT COALESCE(SUM(driver_payout), 0) FROM bookings WHERE driver_id = d.id AND trip_status = 'Trip Completed') - 
+       (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE entity_type = 'driver_payment' AND entity_id = d.id)) as calculated_balance
     FROM drivers d
     LEFT JOIN vehicles v ON d.assigned_vehicle_id = v.id
     WHERE 1=1
@@ -347,14 +351,14 @@ router.get('/:id/statement', requireAuth, (req: AuthenticatedRequest, res: Respo
 // DELETE /api/drivers/:id
 router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
-  const existing = queryOne(`SELECT * FROM drivers WHERE id = ?`, [id]);
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ? OR driver_code = ?`, [id, id]);
   if (!existing) {
-    return res.status(404).json({ error: 'Driver not found.' });
+    return res.status(404).json({ error: 'Chauffeur not found.' });
   }
 
-  // Check dependent records
-  const bookingsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [id])?.count || 0;
-  const paymentsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [id])?.count || 0;
+  // Check dependent records (any bookings or payment records)
+  const bookingsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [existing.id])?.count || 0;
+  const paymentsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [existing.id])?.count || 0;
 
   if (bookingsCount > 0 || paymentsCount > 0) {
     return res.status(400).json({
@@ -369,19 +373,18 @@ router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: Au
     });
   }
 
-  // Clear vehicle assignment if any
-  if (existing.assigned_vehicle_id) {
-    runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [id]);
-  }
+  // Clear vehicle assignment if any vehicle is assigned to this driver
+  runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [existing.id]);
 
-  runSql(`DELETE FROM drivers WHERE id = ?`, [id]);
+  // Permanently delete driver and persist to SQLite
+  runSql(`DELETE FROM drivers WHERE id = ?`, [existing.id]);
 
   recordAuditLog(
     req.user?.id,
     req.user?.full_name,
     'DELETE',
     'driver',
-    id,
+    existing.id,
     `Permanently deleted driver ${existing.full_name} (${existing.driver_code})`
   );
 

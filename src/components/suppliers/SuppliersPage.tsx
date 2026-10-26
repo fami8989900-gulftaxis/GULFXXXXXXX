@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { useSync } from '../../context/SyncContext';
+import { useAuth } from '../../context/AuthContext';
 import { Supplier } from '../../types';
 import {
   Building2,
@@ -24,7 +25,8 @@ import {
 import * as XLSX from 'xlsx';
 
 export const SuppliersPage: React.FC = () => {
-  const { syncVersion } = useSync();
+  const { syncVersion, forceSync } = useSync();
+  const { hasRole } = useAuth();
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState('');
@@ -73,11 +75,12 @@ export const SuppliersPage: React.FC = () => {
     try {
       const res = await api.deleteSupplier(supplierToDelete.id);
       setDeleteSuccess(res.message || 'Supplier deleted successfully.');
+      forceSync();
       setTimeout(() => {
         setSupplierToDelete(null);
         setDeleteSuccess(null);
         fetchSuppliers();
-      }, 1000);
+      }, 900);
     } catch (err: any) {
       setDeleteError(err.message || 'Failed to delete supplier.');
     } finally {
@@ -92,11 +95,12 @@ export const SuppliersPage: React.FC = () => {
     try {
       await api.updateSupplier(supplierToDelete.id, { is_active: 0 });
       setDeleteSuccess(`Supplier ${supplierToDelete.name} has been deactivated. They will no longer appear for new bookings.`);
+      forceSync();
       setTimeout(() => {
         setSupplierToDelete(null);
         setDeleteSuccess(null);
         fetchSuppliers();
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
       setDeleteError(err.message || 'Failed to deactivate supplier.');
     } finally {
@@ -349,13 +353,15 @@ export const SuppliersPage: React.FC = () => {
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => handleOpenDelete(s)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer hover:bg-rose-50 transition-colors"
-                          title="Delete Supplier"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {hasRole('super_admin', 'admin') && (
+                          <button
+                            onClick={() => handleOpenDelete(s)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer hover:bg-rose-50 transition-colors"
+                            title="Delete Supplier"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -607,22 +613,32 @@ export const SuppliersPage: React.FC = () => {
                 <span className="font-bold text-slate-900">{supplierToDelete.total_bookings_count || 0} trip(s)</span>
               </div>
               <div className="flex justify-between">
+                <span className="text-slate-500">Fleet Vehicles:</span>
+                <span className="font-bold text-slate-900">{supplierToDelete.fleet_vehicles_count || 0} vehicle(s)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Financial Payments:</span>
+                <span className="font-bold text-slate-900">{supplierToDelete.payments_count || 0} transaction(s)</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-500">Current Balance:</span>
                 <span className="font-bold font-mono text-slate-900">
-                  {supplierToDelete.current_balance?.toLocaleString() || 0} {supplierToDelete.default_currency}
+                  {(supplierToDelete.calculated_balance ?? supplierToDelete.current_balance ?? 0).toLocaleString()} {supplierToDelete.default_currency || 'SAR'}
                 </span>
               </div>
             </div>
 
-            {/* If supplier has linked bookings or balance, show prominent dependency warning */}
-            {(supplierToDelete.total_bookings_count > 0 || (supplierToDelete.current_balance && Math.abs(supplierToDelete.current_balance) > 0)) ? (
+            {/* If supplier has linked bookings, vehicles, or payments */}
+            {((Number(supplierToDelete.total_bookings_count || 0) > 0) ||
+              (Number(supplierToDelete.fleet_vehicles_count || 0) > 0) ||
+              (Number(supplierToDelete.payments_count || 0) > 0)) ? (
               <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl mb-4 text-xs space-y-2 text-amber-900">
                 <div className="flex items-center gap-2 font-bold text-amber-800">
                   <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                   <span>Unsafe Deletion Warning</span>
                 </div>
                 <p>
-                  This supplier has <strong>{supplierToDelete.total_bookings_count || 0} linked bookings</strong> and active financial statements. Permanent deletion is blocked to prevent breaking audit and dispatch history.
+                  This supplier has <strong>{supplierToDelete.total_bookings_count || 0} linked bookings</strong>, {supplierToDelete.fleet_vehicles_count || 0} fleet vehicles, and {supplierToDelete.payments_count || 0} financial payment transactions. Permanent deletion is blocked to prevent breaking audit trails and dispatch history.
                 </p>
                 <p className="font-semibold text-amber-800">
                   Recommended: Deactivate this supplier instead. Deactivating immediately hides them from new booking assignments while preserving existing statements and invoices.
@@ -630,14 +646,14 @@ export const SuppliersPage: React.FC = () => {
               </div>
             ) : (
               <p className="text-xs text-slate-600 mb-4">
-                Are you sure you want to permanently delete <strong>{supplierToDelete.name}</strong>? This supplier has no dependent trips or transactions. This action cannot be undone.
+                Are you sure you want to permanently delete supplier partner <strong>{supplierToDelete.name}</strong>? This supplier has no dependent trips, vehicles, or transactions. This action cannot be undone.
               </p>
             )}
 
             {deleteError && (
               <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-rose-800 text-xs mb-4 flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span>{deleteError}</span>
+                <span className="leading-relaxed">{deleteError}</span>
               </div>
             )}
 
@@ -648,25 +664,40 @@ export const SuppliersPage: React.FC = () => {
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2.5 pt-2">
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setSupplierToDelete(null)}
                 disabled={deleteLoading || deactivateLoading}
-                className="px-4 py-2 min-h-[38px] bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                className="px-3.5 py-2 min-h-[38px] bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
               >
                 Cancel
               </button>
 
-              {(supplierToDelete.total_bookings_count > 0 || (supplierToDelete.current_balance && Math.abs(supplierToDelete.current_balance) > 0)) ? (
-                <button
-                  type="button"
-                  onClick={handleDeactivateInstead}
-                  disabled={deactivateLoading}
-                  className="px-4 py-2 min-h-[38px] bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
-                >
-                  {deactivateLoading ? 'Deactivating...' : 'Deactivate Supplier Instead'}
-                </button>
+              {((Number(supplierToDelete.total_bookings_count || 0) > 0) ||
+                (Number(supplierToDelete.fleet_vehicles_count || 0) > 0) ||
+                (Number(supplierToDelete.payments_count || 0) > 0)) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    disabled={deleteLoading || deactivateLoading}
+                    className="px-3.5 py-2 min-h-[38px] bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-colors flex items-center gap-1.5"
+                    title="Attempt deletion and verify server validation"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{deleteLoading ? 'Deleting...' : 'Delete Anyway'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDeactivateInstead}
+                    disabled={deactivateLoading || deleteLoading}
+                    className="px-4 py-2 min-h-[38px] bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
+                  >
+                    {deactivateLoading ? 'Deactivating...' : 'Deactivate Supplier (Recommended)'}
+                  </button>
+                </>
               ) : (
                 <button
                   type="button"

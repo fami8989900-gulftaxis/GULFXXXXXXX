@@ -94,9 +94,12 @@ export interface Driver {
   currency: string;
   is_active: number;
   current_balance: number;
+  calculated_balance?: number;
   notes?: string;
   completed_trips_count?: number;
   active_trips_count?: number;
+  total_bookings_count?: number;
+  payments_count?: number;
 }
 
 export interface Vehicle {
@@ -129,10 +132,13 @@ export interface Supplier {
   default_currency: string;
   opening_balance: number;
   current_balance: number;
+  calculated_balance?: number;
   payment_terms: string;
   is_active: number;
   notes?: string;
   total_bookings_count?: number;
+  fleet_vehicles_count?: number;
+  payments_count?: number;
 }
 
 export type EntityType =

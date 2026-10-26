@@ -12,7 +12,11 @@ router.get('/', requireAuth, requirePermission('suppliers'), (req: Authenticated
     SELECT 
       s.*,
       (SELECT COUNT(*) FROM bookings WHERE supplier_id = s.id) as total_bookings_count,
-      (SELECT COUNT(*) FROM vehicles WHERE supplier_id = s.id) as fleet_vehicles_count
+      (SELECT COUNT(*) FROM vehicles WHERE supplier_id = s.id) as fleet_vehicles_count,
+      (SELECT COUNT(*) FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = s.id) as payments_count,
+      (COALESCE(s.opening_balance, 0) + 
+       (SELECT COALESCE(SUM(supplier_cost), 0) FROM bookings WHERE supplier_id = s.id AND trip_status != 'Cancelled') - 
+       (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = s.id)) as calculated_balance
     FROM suppliers s
     WHERE 1=1
   `;
@@ -320,15 +324,15 @@ router.get('/:id/statement', requireAuth, (req: AuthenticatedRequest, res: Respo
 // DELETE /api/suppliers/:id
 router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
-  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [id]);
+  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ? OR supplier_code = ?`, [id, id]);
   if (!existing) {
     return res.status(404).json({ error: 'Supplier not found.' });
   }
 
-  // Check dependent records
-  const bookingsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM bookings WHERE supplier_id = ?`, [id])?.count || 0;
-  const vehiclesCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM vehicles WHERE supplier_id = ?`, [id])?.count || 0;
-  const paymentsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = ?`, [id])?.count || 0;
+  // Check dependent records (bookings, vehicles assigned to supplier, payments)
+  const bookingsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM bookings WHERE supplier_id = ?`, [existing.id])?.count || 0;
+  const vehiclesCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM vehicles WHERE supplier_id = ?`, [existing.id])?.count || 0;
+  const paymentsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = ?`, [existing.id])?.count || 0;
 
   if (bookingsCount > 0 || paymentsCount > 0 || vehiclesCount > 0) {
     return res.status(400).json({
@@ -344,14 +348,15 @@ router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: Au
     });
   }
 
-  runSql(`DELETE FROM suppliers WHERE id = ?`, [id]);
+  // Permanently delete supplier and persist to SQLite
+  runSql(`DELETE FROM suppliers WHERE id = ?`, [existing.id]);
 
   recordAuditLog(
     req.user?.id,
     req.user?.full_name,
     'DELETE',
     'supplier',
-    id,
+    existing.id,
     `Permanently deleted supplier ${existing.name} (${existing.supplier_code})`
   );
 

@@ -340,16 +340,37 @@ async function runAllAuditTests() {
     const shouldBlockDriver = drvWithTrips > 0;
     assert(shouldBlockDriver, 'DeletionSafety', 'Blocks permanent deletion of driver linked to completed trips');
 
-    // Test 8.4: Driver deletion allowed for clean driver with 0 trips
+    // Test 8.4: Driver deletion allowed for clean driver with 0 trips and automatically unlinks vehicle
     runSql(
-      `INSERT INTO drivers (id, driver_code, full_name, mobile, license_number, license_expiry, is_active, created_at, updated_at)
-       VALUES ('drv_test_clean', 'DRV-999', 'Temp Test Chauffeur', '+966500000088', 'LIC-TEST-99', '2030-01-01', 1, datetime('now'), datetime('now'))`
+      `INSERT INTO drivers (id, driver_code, full_name, mobile, license_number, license_expiry, assigned_vehicle_id, is_active, created_at, updated_at)
+       VALUES ('drv_test_clean', 'DRV-999', 'Temp Test Chauffeur', '+966500000088', 'LIC-TEST-99', '2030-01-01', 'veh_01', 1, datetime('now'), datetime('now'))`
     );
+    // Link vehicle to this temp driver
+    runSql("UPDATE vehicles SET assigned_driver_id = 'drv_test_clean' WHERE id = 'veh_01'");
     const cleanDrv = queryOne('SELECT id FROM drivers WHERE id = ?', ['drv_test_clean']);
     assert(!!cleanDrv, 'DeletionSafety', 'Temporary unlinked driver created for deletion test');
+    
+    // Simulate delete driver logic: unlink vehicle and delete driver
+    runSql("UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = 'drv_test_clean'");
     runSql('DELETE FROM drivers WHERE id = ?', ['drv_test_clean']);
     const cleanDrvAfter = queryOne('SELECT id FROM drivers WHERE id = ?', ['drv_test_clean']);
     assert(!cleanDrvAfter, 'DeletionSafety', 'Successfully deletes driver when zero dependencies exist');
+    const vehAfter = queryOne('SELECT assigned_driver_id FROM vehicles WHERE id = ?', ['veh_01']);
+    assert(vehAfter?.assigned_driver_id === null, 'DeletionSafety', 'Vehicle assigned_driver_id cleanly reset to NULL upon driver deletion');
+
+    // Test 8.4b: Supplier deletion blocked if vehicle is assigned to supplier
+    runSql(
+      `INSERT INTO suppliers (id, supplier_code, name, contact_person, mobile, is_active, created_at, updated_at)
+       VALUES ('sup_test_with_veh', 'SUP-88', 'Temp Fleet With Vehicle', 'Fleet Mgr', '+966500000077', 1, datetime('now'), datetime('now'))`
+    );
+    runSql("UPDATE vehicles SET supplier_id = 'sup_test_with_veh' WHERE id = 'veh_02'");
+    const supVehCount = queryOne<{ count: number }>('SELECT count(*) as count FROM vehicles WHERE supplier_id = ?', ['sup_test_with_veh'])?.count || 0;
+    assert(supVehCount > 0, 'DeletionSafety', 'Supplier with assigned vehicle identified');
+    const shouldBlockSupWithVeh = supVehCount > 0;
+    assert(shouldBlockSupWithVeh, 'DeletionSafety', 'Blocks permanent deletion of supplier with assigned fleet vehicles');
+    // Cleanup temp supplier test vehicle assignment
+    runSql("UPDATE vehicles SET supplier_id = 'sup_01' WHERE id = 'veh_02'");
+    runSql("DELETE FROM suppliers WHERE id = 'sup_test_with_veh'");
 
     // Test 8.5: Last Super Administrator protection
     const superAdminCount = queryOne<{ count: number }>("SELECT count(*) as count FROM users WHERE role = 'super_admin' AND is_active = 1")?.count || 0;

@@ -1987,8 +1987,12 @@ router4.get("/", requireAuth, requirePermission("drivers"), (req, res) => {
       d.*,
       v.reg_number as vehicle_reg,
       v.make_model as vehicle_model,
+      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id) as total_bookings_count,
       (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status = 'Trip Completed') as completed_trips_count,
-      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status NOT IN ('Trip Completed', 'Cancelled', 'No Show')) as active_trips_count
+      (SELECT COUNT(*) FROM bookings WHERE driver_id = d.id AND trip_status NOT IN ('Trip Completed', 'Cancelled', 'No Show')) as active_trips_count,
+      (SELECT COUNT(*) FROM payments WHERE entity_type = 'driver_payment' AND entity_id = d.id) as payments_count,
+      ((SELECT COALESCE(SUM(driver_payout), 0) FROM bookings WHERE driver_id = d.id AND trip_status = 'Trip Completed') - 
+       (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE entity_type = 'driver_payment' AND entity_id = d.id)) as calculated_balance
     FROM drivers d
     LEFT JOIN vehicles v ON d.assigned_vehicle_id = v.id
     WHERE 1=1
@@ -2252,12 +2256,12 @@ router4.get("/:id/statement", requireAuth, (req, res) => {
 });
 router4.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
   const { id } = req.params;
-  const existing = queryOne(`SELECT * FROM drivers WHERE id = ?`, [id]);
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ? OR driver_code = ?`, [id, id]);
   if (!existing) {
-    return res.status(404).json({ error: "Driver not found." });
+    return res.status(404).json({ error: "Chauffeur not found." });
   }
-  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [id])?.count || 0;
-  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [id])?.count || 0;
+  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [existing.id])?.count || 0;
+  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [existing.id])?.count || 0;
   if (bookingsCount > 0 || paymentsCount > 0) {
     return res.status(400).json({
       hasDependencies: true,
@@ -2268,16 +2272,14 @@ router4.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, r
       error: `Cannot permanently delete chauffeur '${existing.full_name}' because they have active records: [${bookingsCount} booking(s), ${paymentsCount} payment transaction(s)]. Please deactivate this driver instead to preserve trip records and financial audits.`
     });
   }
-  if (existing.assigned_vehicle_id) {
-    runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [id]);
-  }
-  runSql(`DELETE FROM drivers WHERE id = ?`, [id]);
+  runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [existing.id]);
+  runSql(`DELETE FROM drivers WHERE id = ?`, [existing.id]);
   recordAuditLog(
     req.user?.id,
     req.user?.full_name,
     "DELETE",
     "driver",
-    id,
+    existing.id,
     `Permanently deleted driver ${existing.full_name} (${existing.driver_code})`
   );
   return res.json({
@@ -2461,7 +2463,11 @@ router6.get("/", requireAuth, requirePermission("suppliers"), (req, res) => {
     SELECT 
       s.*,
       (SELECT COUNT(*) FROM bookings WHERE supplier_id = s.id) as total_bookings_count,
-      (SELECT COUNT(*) FROM vehicles WHERE supplier_id = s.id) as fleet_vehicles_count
+      (SELECT COUNT(*) FROM vehicles WHERE supplier_id = s.id) as fleet_vehicles_count,
+      (SELECT COUNT(*) FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = s.id) as payments_count,
+      (COALESCE(s.opening_balance, 0) + 
+       (SELECT COALESCE(SUM(supplier_cost), 0) FROM bookings WHERE supplier_id = s.id AND trip_status != 'Cancelled') - 
+       (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = s.id)) as calculated_balance
     FROM suppliers s
     WHERE 1=1
   `;
@@ -2710,13 +2716,13 @@ router6.get("/:id/statement", requireAuth, (req, res) => {
 });
 router6.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
   const { id } = req.params;
-  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [id]);
+  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ? OR supplier_code = ?`, [id, id]);
   if (!existing) {
     return res.status(404).json({ error: "Supplier not found." });
   }
-  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE supplier_id = ?`, [id])?.count || 0;
-  const vehiclesCount = queryOne(`SELECT COUNT(*) as count FROM vehicles WHERE supplier_id = ?`, [id])?.count || 0;
-  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = ?`, [id])?.count || 0;
+  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE supplier_id = ?`, [existing.id])?.count || 0;
+  const vehiclesCount = queryOne(`SELECT COUNT(*) as count FROM vehicles WHERE supplier_id = ?`, [existing.id])?.count || 0;
+  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = ?`, [existing.id])?.count || 0;
   if (bookingsCount > 0 || paymentsCount > 0 || vehiclesCount > 0) {
     return res.status(400).json({
       hasDependencies: true,
@@ -2728,13 +2734,13 @@ router6.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, r
       error: `Cannot permanently delete supplier '${existing.name}' because they have active dependent records: [${bookingsCount} booking(s), ${vehiclesCount} vehicle(s), ${paymentsCount} payment transaction(s)]. Please deactivate this supplier instead to preserve financial statements and trip history.`
     });
   }
-  runSql(`DELETE FROM suppliers WHERE id = ?`, [id]);
+  runSql(`DELETE FROM suppliers WHERE id = ?`, [existing.id]);
   recordAuditLog(
     req.user?.id,
     req.user?.full_name,
     "DELETE",
     "supplier",
-    id,
+    existing.id,
     `Permanently deleted supplier ${existing.name} (${existing.supplier_code})`
   );
   return res.json({
