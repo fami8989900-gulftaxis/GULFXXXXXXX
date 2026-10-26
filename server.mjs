@@ -4546,6 +4546,10 @@ setInterval(performAutomatedBackup, BACKUP_INTERVAL_MS);
 app.all("/api/*", (req, res) => {
   res.status(404).json({ error: `API route ${req.method} ${req.originalUrl} not found` });
 });
+var publicPath = path4.resolve(process.cwd(), "public");
+if (fs4.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+}
 var distPath = path4.resolve(process.cwd(), "dist");
 var hasDist = fs4.existsSync(path4.join(distPath, "index.html"));
 var isProduction = process.env.NODE_ENV === "production" || hasDist;

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Deep Royal Navy Gradient -->
+    <linearGradient id="gtNavy" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D1B3E"/>
+      <stop offset="50%" stop-color="#081026"/>
+      <stop offset="100%" stop-color="#030611"/>
+    </linearGradient>
+
+    <!-- Metallic Royal Gold Gradient -->
+    <linearGradient id="gtGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF6BD"/>
+      <stop offset="25%" stop-color="#FCD34D"/>
+      <stop offset="60%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+
+    <!-- Gold Border Gradient -->
+    <linearGradient id="gtBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="35%" stop-color="#F59E0B"/>
+      <stop offset="70%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#92400E"/>
+    </linearGradient>
+
+    <!-- Radial Center Glow for Depth -->
+    <radialGradient id="gtCenterGlow" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#1E3A8A" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#030611" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Shadow for Monogram -->
+    <filter id="gtShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.6"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#F59E0B" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Base Squircle -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#gtNavy)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#gtCenterGlow)"/>
+
+  <!-- Outer Precision Gold Border -->
+  <rect x="22" y="22" width="468" height="468" rx="106" fill="none" stroke="url(#gtBorder)" stroke-width="12"/>
+
+  <!-- Inner Delicate Inset Pinstripe -->
+  <rect x="38" y="38" width="436" height="436" rx="92" fill="none" stroke="#FDE68A" stroke-width="1.5" stroke-opacity="0.3"/>
+
+  <!-- GT Monogram Vector Group -->
+  <g fill="url(#gtGold)" filter="url(#gtShadow)">
+    <!-- Letter G (Precision Geometric Path) -->
+    <path d="M 246,142 
+             C 152,142 98,194 98,256 
+             C 98,318 152,370 246,370 
+             L 248,370 
+             L 248,244 
+             L 180,244 
+             L 180,288 
+             L 204,288 
+             L 204,326 
+             C 162,326 144,296 144,256 
+             C 144,216 162,186 246,186 
+             L 248,186 
+             L 248,142 
+             Z" />
+
+    <!-- Letter T (Precision Bold Crossbar & Column) -->
+    <path d="M 264,142 
+             L 414,142 
+             L 414,186 
+             L 362,186 
+             L 362,370 
+             L 316,370 
+             L 316,186 
+             L 264,186 
+             Z" />
+
+    <!-- VIP Chauffeur Diamond Star Accent (Top Right) -->
+    <path d="M 406,102 
+             Q 406,118 422,118 
+             Q 406,118 406,134 
+             Q 406,118 390,118 
+             Q 406,118 406,102 Z" fill="#FFF6BD" />
+
+    <!-- Subtle Premium Baseline Accent Bar -->
+    <rect x="146" y="394" width="220" height="7" rx="3.5" fill="url(#gtGold)" opacity="0.85"/>
+  </g>
+</svg>

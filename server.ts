@@ -106,6 +106,12 @@ app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `API route ${req.method} ${req.originalUrl} not found` });
 });
 
+// Serve static public assets (favicons, download packages)
+const publicPath = path.resolve(process.cwd(), 'public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+}
+
 // Vite middleware or static dist
 const distPath = path.resolve(process.cwd(), 'dist');
 const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
