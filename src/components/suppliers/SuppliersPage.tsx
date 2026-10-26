@@ -45,6 +45,7 @@ export const SuppliersPage: React.FC = () => {
     default_currency: 'SAR',
     opening_balance: 0,
     payment_terms: '15_days',
+    is_active: 1,
     notes: '',
   });
 
@@ -55,7 +56,9 @@ export const SuppliersPage: React.FC = () => {
   const [statementEnd, setStatementEnd] = useState('');
   const [statementLoading, setStatementLoading] = useState(false);
 
-  // Delete Supplier State
+  // Reactivate & Delete Supplier State
+  const [reactivateLoading, setReactivateLoading] = useState(false);
+  const [reactivateMessage, setReactivateMessage] = useState<string | null>(null);
   const [supplierToDelete, setSupplierToDelete] = useState<any | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -108,6 +111,24 @@ export const SuppliersPage: React.FC = () => {
     }
   };
 
+  const handleReactivateSupplier = async (supplier: Supplier) => {
+    setReactivateLoading(true);
+    setReactivateMessage(null);
+    try {
+      const res = await api.reactivateSupplier(supplier.id);
+      setReactivateMessage(res.message || `Supplier ${supplier.name} has been reactivated successfully.`);
+      forceSync();
+      fetchSuppliers();
+      setTimeout(() => {
+        setReactivateMessage(null);
+      }, 4000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to reactivate supplier.');
+    } finally {
+      setReactivateLoading(false);
+    }
+  };
+
   const fetchSuppliers = async () => {
     setLoading(true);
     try {
@@ -138,6 +159,7 @@ export const SuppliersPage: React.FC = () => {
       default_currency: 'SAR',
       opening_balance: 0,
       payment_terms: '15_days',
+      is_active: 1,
       notes: '',
     });
     setModalOpen(true);
@@ -154,6 +176,7 @@ export const SuppliersPage: React.FC = () => {
       default_currency: s.default_currency,
       opening_balance: s.opening_balance,
       payment_terms: s.payment_terms,
+      is_active: s.is_active ?? 1,
       notes: s.notes || '',
     });
     setModalOpen(true);
@@ -232,9 +255,58 @@ export const SuppliersPage: React.FC = () => {
         </button>
       </div>
 
-      {/* Filter & Search */}
-      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row gap-3 text-sm">
-        <div className="relative flex-1">
+      {/* Filter & Search & Quick Status Tabs */}
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 space-y-3 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <button
+              onClick={() => setStatusFilter('all')}
+              className={`px-3 py-1.5 rounded-xl cursor-pointer transition-colors ${
+                statusFilter === 'all'
+                  ? 'bg-blue-600 text-white font-bold shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              All Suppliers ({suppliers.length})
+            </button>
+            <button
+              onClick={() => setStatusFilter('active')}
+              className={`px-3 py-1.5 rounded-xl cursor-pointer transition-colors flex items-center gap-1.5 ${
+                statusFilter === 'active'
+                  ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                  : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+              }`}
+            >
+              <span>🟢</span>
+              <span>Active Partner Fleets</span>
+            </button>
+            <button
+              onClick={() => setStatusFilter('inactive')}
+              className={`px-3 py-1.5 rounded-xl cursor-pointer transition-colors flex items-center gap-1.5 ${
+                statusFilter === 'inactive'
+                  ? 'bg-slate-800 text-white font-bold shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'
+              }`}
+            >
+              <span>⚪</span>
+              <span>Inactive / Suspended</span>
+            </button>
+          </div>
+
+          <div className="w-full sm:w-48">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs text-slate-800 font-semibold min-h-[34px]"
+            >
+              <option value="all">Show: All Suppliers</option>
+              <option value="active">Show: Active Only</option>
+              <option value="inactive">Show: Inactive / Suspended</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
           <input
             type="text"
@@ -244,19 +316,14 @@ export const SuppliersPage: React.FC = () => {
             className="w-full pl-10 pr-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm text-slate-900 min-h-[38px]"
           />
         </div>
-
-        <div className="w-full sm:w-48">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm text-slate-800 font-medium min-h-[38px]"
-          >
-            <option value="all">🟢 All Suppliers</option>
-            <option value="active">Active Vendors</option>
-            <option value="inactive">Inactive</option>
-          </select>
-        </div>
       </div>
+
+      {reactivateMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-medium flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{reactivateMessage}</span>
+        </div>
+      )}
 
       {/* COMPACT SINGLE-LINE SUPPLIER TABLE - FULL AVAILABLE WIDTH */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden w-full">
@@ -338,7 +405,18 @@ export const SuppliersPage: React.FC = () => {
 
                     {/* Actions */}
                     <td className="py-3 px-3.5 text-center whitespace-nowrap">
-                      <div className="inline-flex items-center gap-2">
+                      <div className="inline-flex items-center gap-1.5">
+                        {s.is_active === 0 && hasRole('super_admin', 'admin') && (
+                          <button
+                            onClick={() => handleReactivateSupplier(s)}
+                            disabled={reactivateLoading}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg font-bold text-xs cursor-pointer flex items-center gap-1 transition-colors"
+                            title="Reactivate Supplier Partner for new bookings"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Reactivate</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => handleOpenStatement(s)}
                           className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-bold text-xs cursor-pointer"
@@ -460,6 +538,18 @@ export const SuppliersPage: React.FC = () => {
                     <option value="15_days">15 Days</option>
                     <option value="30_days">30 Days</option>
                     <option value="cash_on_delivery">Cash per Trip</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[13.5px] font-semibold text-slate-700 mb-1.5">Partner Status</label>
+                  <select
+                    value={formData.is_active}
+                    onChange={(e) => setFormData({ ...formData, is_active: parseInt(e.target.value, 10) })}
+                    className="w-full min-h-[40px] px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:bg-white font-medium text-sm"
+                  >
+                    <option value={1}>🟢 Active Partner Fleet</option>
+                    <option value={0}>⚪ Inactive / Suspended</option>
                   </select>
                 </div>
 

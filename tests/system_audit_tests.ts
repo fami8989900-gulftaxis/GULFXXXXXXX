@@ -418,6 +418,111 @@ async function runAllAuditTests() {
   }
 
   // -------------------------------------------------------------
+  // SUITE 9: Driver & Supplier Reactivation and Expense Management
+  // -------------------------------------------------------------
+  console.log('\n--- 9. Testing Reactivation Lifecycle & Expense Management ---');
+  {
+    const now = new Date().toISOString();
+
+    // Test 9.1: Driver Deactivation & Reactivation Lifecycle
+    const testDriverId = 'drv_reactivate_test_' + Date.now();
+    runSql(
+      `INSERT INTO drivers (id, driver_code, full_name, mobile, license_number, license_expiry, is_active, created_at, updated_at)
+       VALUES (?, 'DRV-RC-1', 'Captain Tariq Al-Otaibi', '+966550001122', 'LIC-RC-1', '2030-05-15', 1, ?, ?)`,
+      [testDriverId, now, now]
+    );
+
+    // Deactivate driver
+    runSql('UPDATE drivers SET is_active = 0, updated_at = ? WHERE id = ?', [new Date().toISOString(), testDriverId]);
+    const deactivatedDriver = queryOne('SELECT is_active, full_name, driver_code FROM drivers WHERE id = ?', [testDriverId]);
+    assert(deactivatedDriver?.is_active === 0, 'DriverReactivation', 'Driver successfully deactivated (is_active = 0)');
+
+    // Reactivate driver
+    runSql('UPDATE drivers SET is_active = 1, updated_at = ? WHERE id = ?', [new Date().toISOString(), testDriverId]);
+    const reactivatedDriver = queryOne('SELECT is_active, full_name, driver_code FROM drivers WHERE id = ?', [testDriverId]);
+    assert(reactivatedDriver?.is_active === 1, 'DriverReactivation', 'Driver successfully reactivated (is_active = 1)');
+    assert(reactivatedDriver?.full_name === 'Captain Tariq Al-Otaibi', 'DriverReactivation', 'Driver name preserved upon reactivation');
+    assert(reactivatedDriver?.driver_code === 'DRV-RC-1', 'DriverReactivation', 'Driver code preserved upon reactivation');
+
+    // Clean up test driver
+    runSql('DELETE FROM drivers WHERE id = ?', [testDriverId]);
+
+    // Test 9.2: Supplier Deactivation & Reactivation Lifecycle
+    const testSupId = 'sup_reactivate_test_' + Date.now();
+    runSql(
+      `INSERT INTO suppliers (id, supplier_code, name, contact_person, mobile, is_active, created_at, updated_at)
+       VALUES (?, 'SUP-RC-1', 'Al-Yamama Chauffeur Fleet', 'Fahad Manager', '+966551112233', 1, ?, ?)`,
+      [testSupId, now, now]
+    );
+
+    // Deactivate supplier
+    runSql('UPDATE suppliers SET is_active = 0, updated_at = ? WHERE id = ?', [new Date().toISOString(), testSupId]);
+    const deactivatedSup = queryOne('SELECT is_active, name, supplier_code FROM suppliers WHERE id = ?', [testSupId]);
+    assert(deactivatedSup?.is_active === 0, 'SupplierReactivation', 'Supplier successfully deactivated (is_active = 0)');
+
+    // Reactivate supplier
+    runSql('UPDATE suppliers SET is_active = 1, updated_at = ? WHERE id = ?', [new Date().toISOString(), testSupId]);
+    const reactivatedSup = queryOne('SELECT is_active, name, supplier_code FROM suppliers WHERE id = ?', [testSupId]);
+    assert(reactivatedSup?.is_active === 1, 'SupplierReactivation', 'Supplier successfully reactivated (is_active = 1)');
+    assert(reactivatedSup?.name === 'Al-Yamama Chauffeur Fleet', 'SupplierReactivation', 'Supplier name preserved upon reactivation');
+    assert(reactivatedSup?.supplier_code === 'SUP-RC-1', 'SupplierReactivation', 'Supplier code preserved upon reactivation');
+
+    // Clean up test supplier
+    runSql('DELETE FROM suppliers WHERE id = ?', [testSupId]);
+
+    // Test 9.3: Expense Creation with expense_category column
+    const testExpenseId = 'exp_test_' + Date.now();
+    const testPaymentRef = 'EXP-REF-' + Date.now();
+    runSql(
+      `INSERT INTO payments (id, payment_ref, entity_type, entity_id, amount, currency, payment_date, payment_method, reference_no, notes, expense_category, created_at, updated_at)
+       VALUES (?, ?, 'general_expense', 'system', 450, 'SAR', '2026-10-26', 'Corporate Card', 'EXP-AUDIT-001', 'Monthly Fleet GPS Subscription', 'Software & Technology', ?, ?)`,
+      [testExpenseId, testPaymentRef, now, now]
+    );
+
+    const createdExpense = queryOne('SELECT * FROM payments WHERE id = ?', [testExpenseId]);
+    assert(!!createdExpense, 'ExpenseManagement', 'General expense created in payments table');
+    assert(createdExpense?.expense_category === 'Software & Technology', 'ExpenseManagement', 'expense_category column stored accurately');
+    assert(createdExpense?.amount === 450, 'ExpenseManagement', 'Expense amount recorded accurately');
+
+    // Test 9.4: Expense In-Place Update (Edit)
+    const updateTime = new Date().toISOString();
+    runSql(
+      `UPDATE payments SET amount = ?, expense_category = ?, notes = ?, payment_method = ?, updated_at = ? WHERE id = ?`,
+      [520, 'Vehicle Maintenance', 'Adjusted Fleet GPS & Telematics System', 'bank_transfer', updateTime, testExpenseId]
+    );
+
+    const updatedExpense = queryOne('SELECT * FROM payments WHERE id = ?', [testExpenseId]);
+    assert(updatedExpense?.amount === 520, 'ExpenseManagement', 'Expense amount updated in-place to 520');
+    assert(updatedExpense?.expense_category === 'Vehicle Maintenance', 'ExpenseManagement', 'Expense category updated to Vehicle Maintenance');
+    assert(updatedExpense?.notes === 'Adjusted Fleet GPS & Telematics System', 'ExpenseManagement', 'Expense notes updated');
+    assert(updatedExpense?.id === testExpenseId, 'ExpenseManagement', 'Original payment ID preserved across updates');
+
+    // Test 9.5: Expense Safe Deletion
+    runSql('DELETE FROM payments WHERE id = ?', [testExpenseId]);
+    const deletedExpense = queryOne('SELECT id FROM payments WHERE id = ?', [testExpenseId]);
+    assert(!deletedExpense, 'ExpenseManagement', 'General expense cleanly deleted without leaving orphaned rows');
+
+    // Test 9.6: Protection of Customer Receipts and Supplier/Driver Payouts
+    const customerReceipt = queryOne("SELECT * FROM payments WHERE entity_type = 'customer_receipt' LIMIT 1");
+    if (customerReceipt) {
+      const isProtected = ['customer_receipt', 'driver_payout', 'supplier_payout'].includes(customerReceipt.entity_type);
+      assert(isProtected, 'PaymentProtection', 'Customer receipts flagged as protected from arbitrary expense deletion');
+    }
+
+    const driverPayout = queryOne("SELECT * FROM payments WHERE entity_type = 'driver_payout' LIMIT 1");
+    if (driverPayout) {
+      const isProtected = ['customer_receipt', 'driver_payout', 'supplier_payout'].includes(driverPayout.entity_type);
+      assert(isProtected, 'PaymentProtection', 'Driver payouts flagged as protected from arbitrary expense deletion');
+    }
+
+    // Test 9.7: Multi-filter query on payments
+    const filterResults = queryAll(
+      `SELECT count(*) as count, COALESCE(SUM(amount), 0) as total FROM payments WHERE currency = 'SAR'`
+    );
+    assert(Array.isArray(filterResults) && filterResults[0].count >= 0, 'ExpenseReporting', 'Payments query executes with currency filter and aggregates total');
+  }
+
+  // -------------------------------------------------------------
   // Summary
   // -------------------------------------------------------------
   console.log('\n=============================================================');

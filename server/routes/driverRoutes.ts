@@ -236,6 +236,34 @@ router.put('/:id', requireAuth, requirePermission('drivers'), (req: Authenticate
   return res.json({ success: true, driver: updated, message: `Driver ${updated.full_name} updated successfully.` });
 });
 
+// POST /api/drivers/:id/reactivate
+router.post('/:id/reactivate', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ? OR driver_code = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Chauffeur not found.' });
+  }
+
+  const now = new Date().toISOString();
+  runSql(`UPDATE drivers SET is_active = 1, updated_at = ? WHERE id = ?`, [now, existing.id]);
+
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    'UPDATE',
+    'driver',
+    existing.id,
+    `Reactivated chauffeur ${existing.full_name} (${existing.driver_code})`
+  );
+
+  const updated = queryOne(`SELECT * FROM drivers WHERE id = ?`, [existing.id]);
+  return res.json({
+    success: true,
+    driver: updated,
+    message: `Chauffeur '${existing.full_name}' (${existing.driver_code}) successfully reactivated.`,
+  });
+});
+
 // GET /api/drivers/:id/statement
 router.get('/:id/statement', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;

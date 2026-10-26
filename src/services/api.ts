@@ -101,6 +101,8 @@ export const api = {
     apiRequest(`/drivers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteDriver: (id: string) =>
     apiRequest(`/drivers/${id}`, { method: 'DELETE' }),
+  reactivateDriver: (id: string) =>
+    apiRequest(`/drivers/${id}/reactivate`, { method: 'POST' }),
   getDriverStatement: (id: string, params: Record<string, any> = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -139,6 +141,8 @@ export const api = {
     apiRequest(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteSupplier: (id: string) =>
     apiRequest(`/suppliers/${id}`, { method: 'DELETE' }),
+  reactivateSupplier: (id: string) =>
+    apiRequest(`/suppliers/${id}/reactivate`, { method: 'POST' }),
   getSupplierStatement: (id: string, params: Record<string, any> = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -164,6 +168,14 @@ export const api = {
   },
   createPayment: (data: any) =>
     apiRequest('/finance/payments', { method: 'POST', body: JSON.stringify(data) }),
+  updatePayment: (id: string, data: any) =>
+    apiRequest(`/finance/payments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePayment: (id: string) =>
+    apiRequest(`/finance/payments/${id}`, { method: 'DELETE' }),
+  updateExpense: (id: string, data: any) =>
+    apiRequest(`/finance/payments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteExpense: (id: string) =>
+    apiRequest(`/finance/payments/${id}`, { method: 'DELETE' }),
   getPaymentReceipt: (id: string) => apiRequest(`/finance/receipt/${id}`),
 
   // Reports

@@ -232,6 +232,14 @@ function initSchema(db) {
       created_at TEXT NOT NULL
     );
   `);
+  try {
+    db.run("ALTER TABLE payments ADD COLUMN expense_category TEXT;");
+  } catch (e) {
+  }
+  try {
+    db.run("ALTER TABLE payments ADD COLUMN updated_at TEXT;");
+  } catch (e) {
+  }
   db.run(`
     CREATE TABLE IF NOT EXISTS trip_status_logs (
       id TEXT PRIMARY KEY,
@@ -2173,6 +2181,29 @@ router4.put("/:id", requireAuth, requirePermission("drivers"), (req, res) => {
   const updated = queryOne(`SELECT * FROM drivers WHERE id = ?`, [id]);
   return res.json({ success: true, driver: updated, message: `Driver ${updated.full_name} updated successfully.` });
 });
+router4.post("/:id/reactivate", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ? OR driver_code = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Chauffeur not found." });
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  runSql(`UPDATE drivers SET is_active = 1, updated_at = ? WHERE id = ?`, [now, existing.id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "UPDATE",
+    "driver",
+    existing.id,
+    `Reactivated chauffeur ${existing.full_name} (${existing.driver_code})`
+  );
+  const updated = queryOne(`SELECT * FROM drivers WHERE id = ?`, [existing.id]);
+  return res.json({
+    success: true,
+    driver: updated,
+    message: `Chauffeur '${existing.full_name}' (${existing.driver_code}) successfully reactivated.`
+  });
+});
 router4.get("/:id/statement", requireAuth, (req, res) => {
   const { id } = req.params;
   const { startDate, endDate } = req.query;
@@ -2632,6 +2663,29 @@ router6.put("/:id", requireAuth, requirePermission("suppliers"), (req, res) => {
   const updated = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [id]);
   return res.json({ success: true, supplier: updated, message: `Supplier ${updated.name} updated successfully.` });
 });
+router6.post("/:id/reactivate", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ? OR supplier_code = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Supplier not found." });
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  runSql(`UPDATE suppliers SET is_active = 1, updated_at = ? WHERE id = ?`, [now, existing.id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "UPDATE",
+    "supplier",
+    existing.id,
+    `Reactivated supplier ${existing.name} (${existing.supplier_code})`
+  );
+  const updated = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [existing.id]);
+  return res.json({
+    success: true,
+    supplier: updated,
+    message: `Supplier '${existing.name}' (${existing.supplier_code}) successfully reactivated.`
+  });
+});
 router6.get("/:id/statement", requireAuth, (req, res) => {
   const { id } = req.params;
   const { startDate, endDate } = req.query;
@@ -2868,12 +2922,28 @@ router7.get("/overview", requireAuth, requirePermission("payments"), (req, res) 
   });
 });
 router7.get("/payments", requireAuth, requirePermission("payments"), (req, res) => {
-  const { type, startDate, endDate, bookingId, search } = req.query;
+  const { type, startDate, endDate, bookingId, search, category, driverId, supplierId, currency } = req.query;
   let sql = `SELECT * FROM payments WHERE 1=1`;
   const params = [];
   if (type && type !== "all") {
     sql += ` AND entity_type = ?`;
     params.push(type);
+  }
+  if (category && category !== "all") {
+    sql += ` AND expense_category = ?`;
+    params.push(category);
+  }
+  if (driverId && driverId !== "all") {
+    sql += ` AND (entity_id = ? OR notes LIKE ?)`;
+    params.push(driverId, `%${driverId}%`);
+  }
+  if (supplierId && supplierId !== "all") {
+    sql += ` AND (entity_id = ? OR notes LIKE ?)`;
+    params.push(supplierId, `%${supplierId}%`);
+  }
+  if (currency && currency !== "all") {
+    sql += ` AND currency = ?`;
+    params.push(currency);
   }
   if (startDate) {
     sql += ` AND payment_date >= ?`;
@@ -2889,12 +2959,13 @@ router7.get("/payments", requireAuth, requirePermission("payments"), (req, res) 
   }
   if (search && typeof search === "string") {
     const term = `%${search.trim()}%`;
-    sql += ` AND (payment_ref LIKE ? OR entity_name LIKE ? OR reference_no LIKE ? OR notes LIKE ? OR booking_ref LIKE ?)`;
-    params.push(term, term, term, term, term);
+    sql += ` AND (payment_ref LIKE ? OR entity_name LIKE ? OR reference_no LIKE ? OR notes LIKE ? OR booking_ref LIKE ? OR expense_category LIKE ?)`;
+    params.push(term, term, term, term, term, term);
   }
   sql += ` ORDER BY payment_date DESC, created_at DESC LIMIT 500`;
   const payments = queryAll(sql, params);
-  return res.json({ payments });
+  const totalAmount = payments.reduce((acc, p) => acc + (p.amount || 0), 0);
+  return res.json({ payments, totalAmount });
 });
 router7.post("/payments", requireAuth, requirePermission("payments"), (req, res) => {
   const {
@@ -2908,7 +2979,8 @@ router7.post("/payments", requireAuth, requirePermission("payments"), (req, res)
     payment_method,
     payment_date,
     reference_no,
-    notes
+    notes,
+    expense_category
   } = req.body;
   if (!entity_type || !amount || !payment_method || !payment_date) {
     return res.status(400).json({ error: "Please provide Transaction Type, Amount, Payment Method, and Payment Date." });
@@ -2924,8 +2996,8 @@ router7.post("/payments", requireAuth, requirePermission("payments"), (req, res)
     `INSERT INTO payments (
       id, payment_ref, entity_type, entity_id, entity_name, booking_id, booking_ref,
       amount, currency, payment_method, payment_date, reference_no, notes,
-      created_by_id, created_by_name, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      expense_category, created_by_id, created_by_name, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       payment_ref,
@@ -2940,8 +3012,10 @@ router7.post("/payments", requireAuth, requirePermission("payments"), (req, res)
       payment_date,
       reference_no || null,
       notes || null,
+      expense_category || (entity_type === "general_expense" ? "General Operations" : null),
       req.user?.id,
       req.user?.full_name,
+      now,
       now
     ]
   );
@@ -2982,6 +3056,134 @@ router7.post("/payments", requireAuth, requirePermission("payments"), (req, res)
     success: true,
     payment: created,
     message: `Payment ${payment_ref} for ${numAmount} ${currency || "SAR"} successfully recorded.`
+  });
+});
+router7.put("/payments/:id", requireAuth, requirePermission("payments"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM payments WHERE id = ? OR payment_ref = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Transaction or expense record not found." });
+  }
+  const {
+    amount,
+    currency,
+    payment_method,
+    payment_date,
+    reference_no,
+    notes,
+    expense_category,
+    entity_id,
+    entity_name,
+    booking_id,
+    booking_ref
+  } = req.body;
+  if (!amount || !payment_method || !payment_date) {
+    return res.status(400).json({ error: "Please provide Amount, Payment Method, and Payment Date." });
+  }
+  const numAmount = parseFloat(amount);
+  if (isNaN(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: "Please provide a valid positive amount." });
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const amountDiff = numAmount - existing.amount;
+  if (existing.entity_type === "customer_receipt" && existing.booking_id) {
+    const booking = queryOne(`SELECT id, customer_price, paid_amount FROM bookings WHERE id = ?`, [existing.booking_id]);
+    if (booking) {
+      const newPaid = Math.round(((booking.paid_amount || 0) + amountDiff) * 100) / 100;
+      let newPaymentStatus = "partial";
+      if (newPaid >= booking.customer_price) newPaymentStatus = "paid";
+      else if (newPaid <= 0) newPaymentStatus = "unpaid";
+      runSql(`UPDATE bookings SET paid_amount = ?, payment_status = ?, updated_at = ? WHERE id = ?`, [newPaid, newPaymentStatus, now, existing.booking_id]);
+    }
+  }
+  if (existing.entity_type === "driver_payment" && existing.entity_id) {
+    runSql(`UPDATE drivers SET current_balance = current_balance - ? WHERE id = ?`, [amountDiff, existing.entity_id]);
+  }
+  if (existing.entity_type === "supplier_payment" && existing.entity_id) {
+    runSql(`UPDATE suppliers SET current_balance = current_balance - ? WHERE id = ?`, [amountDiff, existing.entity_id]);
+  }
+  runSql(
+    `UPDATE payments SET
+      amount = ?,
+      currency = ?,
+      payment_method = ?,
+      payment_date = ?,
+      reference_no = ?,
+      notes = ?,
+      expense_category = ?,
+      entity_id = ?,
+      entity_name = ?,
+      booking_id = ?,
+      booking_ref = ?,
+      updated_at = ?
+    WHERE id = ?`,
+    [
+      numAmount,
+      currency || existing.currency,
+      payment_method,
+      payment_date,
+      reference_no !== void 0 ? reference_no : existing.reference_no,
+      notes !== void 0 ? notes : existing.notes,
+      expense_category !== void 0 ? expense_category : existing.expense_category,
+      entity_id !== void 0 ? entity_id : existing.entity_id,
+      entity_name !== void 0 ? entity_name : existing.entity_name,
+      booking_id !== void 0 ? booking_id : existing.booking_id,
+      booking_ref !== void 0 ? booking_ref : existing.booking_ref,
+      now,
+      existing.id
+    ]
+  );
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "UPDATE",
+    "payment",
+    existing.id,
+    `Updated ${existing.entity_type} ${existing.payment_ref}: ${numAmount} ${currency || existing.currency}`
+  );
+  const updated = queryOne(`SELECT * FROM payments WHERE id = ?`, [existing.id]);
+  return res.json({
+    success: true,
+    payment: updated,
+    message: `Record '${existing.payment_ref}' successfully updated.`
+  });
+});
+router7.delete("/payments/:id", requireAuth, requirePermission("payments"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM payments WHERE id = ? OR payment_ref = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Transaction or expense record not found." });
+  }
+  if (existing.entity_type === "customer_receipt" && existing.booking_id) {
+    const b = queryOne(`SELECT id, booking_ref FROM bookings WHERE id = ?`, [existing.booking_id]);
+    if (b) {
+      return res.status(400).json({
+        error: `Cannot directly delete customer receipt '${existing.payment_ref}' because it is linked to active booking '${b.booking_ref}'. Please edit the receipt amount or issue an adjustment entry to maintain audit integrity.`
+      });
+    }
+  }
+  if (existing.entity_type === "driver_payment" && existing.entity_id) {
+    return res.status(400).json({
+      error: `Cannot delete driver payout '${existing.payment_ref}' as it is an established ledger transaction on the driver's statement. Please edit the payment or issue an adjustment entry.`
+    });
+  }
+  if (existing.entity_type === "supplier_payment" && existing.entity_id) {
+    return res.status(400).json({
+      error: `Cannot delete supplier payout '${existing.payment_ref}' as it is part of the partner's recorded statement. Please edit or adjust the transaction instead.`
+    });
+  }
+  runSql(`DELETE FROM payments WHERE id = ?`, [existing.id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "DELETE",
+    "payment",
+    existing.id,
+    `Deleted expense/transaction ${existing.payment_ref} (${existing.amount} ${existing.currency})`
+  );
+  return res.json({
+    success: true,
+    message: `Expense '${existing.payment_ref}' successfully deleted.`
   });
 });
 router7.get("/receipt/:id", requireAuth, (req, res) => {

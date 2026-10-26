@@ -260,6 +260,17 @@ function initSchema(db: any) {
     );
   `);
 
+  try {
+    db.run('ALTER TABLE payments ADD COLUMN expense_category TEXT;');
+  } catch (e) {
+    // column already exists
+  }
+  try {
+    db.run('ALTER TABLE payments ADD COLUMN updated_at TEXT;');
+  } catch (e) {
+    // column already exists
+  }
+
   // Trip Status History / Audit
   db.run(`
     CREATE TABLE IF NOT EXISTS trip_status_logs (

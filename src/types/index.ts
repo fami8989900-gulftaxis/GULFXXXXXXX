@@ -162,8 +162,10 @@ export interface Payment {
   payment_date: string;
   reference_no?: string;
   notes?: string;
+  expense_category?: string;
   created_by_name?: string;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface AuditLog {

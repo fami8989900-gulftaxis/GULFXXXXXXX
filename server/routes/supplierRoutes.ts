@@ -213,6 +213,34 @@ router.put('/:id', requireAuth, requirePermission('suppliers'), (req: Authentica
   return res.json({ success: true, supplier: updated, message: `Supplier ${updated.name} updated successfully.` });
 });
 
+// POST /api/suppliers/:id/reactivate
+router.post('/:id/reactivate', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ? OR supplier_code = ?`, [id, id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Supplier not found.' });
+  }
+
+  const now = new Date().toISOString();
+  runSql(`UPDATE suppliers SET is_active = 1, updated_at = ? WHERE id = ?`, [now, existing.id]);
+
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    'UPDATE',
+    'supplier',
+    existing.id,
+    `Reactivated supplier ${existing.name} (${existing.supplier_code})`
+  );
+
+  const updated = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [existing.id]);
+  return res.json({
+    success: true,
+    supplier: updated,
+    message: `Supplier '${existing.name}' (${existing.supplier_code}) successfully reactivated.`,
+  });
+});
+
 // GET /api/suppliers/:id/statement
 router.get('/:id/statement', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
