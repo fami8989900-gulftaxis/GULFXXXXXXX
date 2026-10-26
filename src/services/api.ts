@@ -99,6 +99,8 @@ export const api = {
     apiRequest('/drivers', { method: 'POST', body: JSON.stringify(data) }),
   updateDriver: (id: string, data: any) =>
     apiRequest(`/drivers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDriver: (id: string) =>
+    apiRequest(`/drivers/${id}`, { method: 'DELETE' }),
   getDriverStatement: (id: string, params: Record<string, any> = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -135,6 +137,8 @@ export const api = {
     apiRequest('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
   updateSupplier: (id: string, data: any) =>
     apiRequest(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSupplier: (id: string) =>
+    apiRequest(`/suppliers/${id}`, { method: 'DELETE' }),
   getSupplierStatement: (id: string, params: Record<string, any> = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
@@ -179,6 +183,8 @@ export const api = {
     apiRequest(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   toggleUserStatus: (id: string) =>
     apiRequest(`/users/${id}/toggle-status`, { method: 'POST' }),
+  deleteUser: (id: string) =>
+    apiRequest(`/users/${id}`, { method: 'DELETE' }),
 
   // Settings & Backups
   getSettings: () => apiRequest('/settings'),
@@ -195,6 +201,11 @@ export const api = {
   createBackup: () => apiRequest('/backups/create', { method: 'POST' }),
   restoreBackup: (filename: string) =>
     apiRequest('/backups/restore', { method: 'POST', body: JSON.stringify({ filename }) }),
+
+  // Data Management / Fresh Start
+  getDataSummary: () => apiRequest('/data-management/summary'),
+  executeFreshStart: (payload: any) =>
+    apiRequest('/data-management/fresh-start', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Sync Pulse
   getPulse: () => apiRequest('/sync/pulse'),

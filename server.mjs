@@ -3,8 +3,8 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import path3 from "path";
-import fs3 from "fs";
+import path4 from "path";
+import fs4 from "fs";
 
 // server/db.ts
 import initSqlJs from "sql.js";
@@ -59,6 +59,23 @@ function runSql(sql, params = []) {
   if (!dbInstance) throw new Error("Database not initialized");
   dbInstance.run(sql, params);
   persistDb();
+}
+function runTransaction(callback) {
+  if (!dbInstance) throw new Error("Database not initialized");
+  dbInstance.run("BEGIN TRANSACTION;");
+  try {
+    const result = callback();
+    dbInstance.run("COMMIT;");
+    persistDb();
+    return result;
+  } catch (err) {
+    try {
+      dbInstance.run("ROLLBACK;");
+    } catch (rbErr) {
+      console.error("Failed to rollback transaction:", rbErr);
+    }
+    throw err;
+  }
 }
 function queryAll(sql, params = []) {
   if (!dbInstance) throw new Error("Database not initialized");
@@ -2233,6 +2250,41 @@ router4.get("/:id/statement", requireAuth, (req, res) => {
     }
   });
 });
+router4.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ?`, [id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Driver not found." });
+  }
+  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [id])?.count || 0;
+  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [id])?.count || 0;
+  if (bookingsCount > 0 || paymentsCount > 0) {
+    return res.status(400).json({
+      hasDependencies: true,
+      counts: {
+        bookings: bookingsCount,
+        payments: paymentsCount
+      },
+      error: `Cannot permanently delete chauffeur '${existing.full_name}' because they have active records: [${bookingsCount} booking(s), ${paymentsCount} payment transaction(s)]. Please deactivate this driver instead to preserve trip records and financial audits.`
+    });
+  }
+  if (existing.assigned_vehicle_id) {
+    runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [id]);
+  }
+  runSql(`DELETE FROM drivers WHERE id = ?`, [id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "DELETE",
+    "driver",
+    id,
+    `Permanently deleted driver ${existing.full_name} (${existing.driver_code})`
+  );
+  return res.json({
+    success: true,
+    message: `Chauffeur '${existing.full_name}' (${existing.driver_code}) successfully deleted.`
+  });
+});
 var driverRoutes_default = router4;
 
 // server/routes/vehicleRoutes.ts
@@ -2654,6 +2706,40 @@ router6.get("/:id/statement", requireAuth, (req, res) => {
       totalPaid: entries.reduce((s, e) => s + e.paid, 0),
       closingBalance: seqBalance
     }
+  });
+});
+router6.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM suppliers WHERE id = ?`, [id]);
+  if (!existing) {
+    return res.status(404).json({ error: "Supplier not found." });
+  }
+  const bookingsCount = queryOne(`SELECT COUNT(*) as count FROM bookings WHERE supplier_id = ?`, [id])?.count || 0;
+  const vehiclesCount = queryOne(`SELECT COUNT(*) as count FROM vehicles WHERE supplier_id = ?`, [id])?.count || 0;
+  const paymentsCount = queryOne(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'supplier_payment' AND entity_id = ?`, [id])?.count || 0;
+  if (bookingsCount > 0 || paymentsCount > 0 || vehiclesCount > 0) {
+    return res.status(400).json({
+      hasDependencies: true,
+      counts: {
+        bookings: bookingsCount,
+        vehicles: vehiclesCount,
+        payments: paymentsCount
+      },
+      error: `Cannot permanently delete supplier '${existing.name}' because they have active dependent records: [${bookingsCount} booking(s), ${vehiclesCount} vehicle(s), ${paymentsCount} payment transaction(s)]. Please deactivate this supplier instead to preserve financial statements and trip history.`
+    });
+  }
+  runSql(`DELETE FROM suppliers WHERE id = ?`, [id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "DELETE",
+    "supplier",
+    id,
+    `Permanently deleted supplier ${existing.name} (${existing.supplier_code})`
+  );
+  return res.json({
+    success: true,
+    message: `Supplier '${existing.name}' (${existing.supplier_code}) successfully deleted.`
   });
 });
 var supplierRoutes_default = router6;
@@ -3873,6 +3959,50 @@ router10.post("/:id/toggle-status", requireAuth, requireRole("super_admin", "adm
     message: `User ${target.username} has been ${newStatus === 1 ? "activated" : "deactivated"}.`
   });
 });
+router10.delete("/:id", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  const { id } = req.params;
+  const target = queryOne(`SELECT id, username, email, full_name, role, is_active FROM users WHERE id = ?`, [id]);
+  if (!target) {
+    return res.status(404).json({ error: "User not found." });
+  }
+  if (target.id === req.user?.id) {
+    return res.status(400).json({ error: "You cannot delete your own active account." });
+  }
+  if (target.role === "super_admin" && req.user?.role !== "super_admin") {
+    return res.status(403).json({ error: "Only a Super Administrator can delete Super Admin accounts." });
+  }
+  if (target.role === "super_admin") {
+    const superAdminCount = queryOne(
+      `SELECT count(*) as count FROM users WHERE role = 'super_admin' AND is_active = 1`
+    )?.count || 0;
+    if (superAdminCount <= 1) {
+      return res.status(400).json({
+        error: "Cannot delete the last active Super Administrator. The system must always retain at least one active Super Admin."
+      });
+    }
+  }
+  const totalAdminCount = queryOne(
+    `SELECT count(*) as count FROM users WHERE role IN ('super_admin', 'admin') AND is_active = 1`
+  )?.count || 0;
+  if (totalAdminCount <= 1 && (target.role === "admin" || target.role === "super_admin")) {
+    return res.status(400).json({
+      error: "Cannot delete the last remaining administrative account capable of managing the system."
+    });
+  }
+  runSql(`DELETE FROM users WHERE id = ?`, [id]);
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    "DELETE",
+    "user",
+    id,
+    `Permanently deleted staff user account: ${target.username} (${target.full_name}, ${target.role})`
+  );
+  return res.json({
+    success: true,
+    message: `User account @${target.username} (${target.full_name}) successfully deleted.`
+  });
+});
 var userRoutes_default = router10;
 
 // server/routes/settingsRoutes.ts
@@ -3955,6 +4085,188 @@ router12.get("/pulse", requireAuth, (req, res) => {
 });
 var syncRoutes_default = router12;
 
+// server/routes/dataManagementRoutes.ts
+import { Router as Router13 } from "express";
+import bcrypt4 from "bcryptjs";
+import fs3 from "fs";
+import path3 from "path";
+var router13 = Router13();
+var DATA_DIR3 = path3.resolve(process.cwd(), "data");
+var BACKUPS_DIR3 = path3.join(DATA_DIR3, "backups");
+router13.get("/summary", requireAuth, requireRole("super_admin", "admin"), (req, res) => {
+  try {
+    const bookingsCount = queryOne("SELECT count(*) as count FROM bookings")?.count || 0;
+    const activeBookingsCount = queryOne(
+      "SELECT count(*) as count FROM bookings WHERE trip_status NOT IN ('Trip Completed', 'Cancelled', 'No Show')"
+    )?.count || 0;
+    const tripLogsCount = queryOne("SELECT count(*) as count FROM trip_status_logs")?.count || 0;
+    const paymentsCount = queryOne("SELECT count(*) as count FROM payments")?.count || 0;
+    const driversCount = queryOne("SELECT count(*) as count FROM drivers")?.count || 0;
+    const suppliersCount = queryOne("SELECT count(*) as count FROM suppliers")?.count || 0;
+    const vehiclesCount = queryOne("SELECT count(*) as count FROM vehicles")?.count || 0;
+    const usersCount = queryOne("SELECT count(*) as count FROM users")?.count || 0;
+    const settingsCount = queryOne("SELECT count(*) as count FROM settings")?.count || 0;
+    const auditLogsCount = queryOne("SELECT count(*) as count FROM audit_logs")?.count || 0;
+    const backupsCount = queryOne("SELECT count(*) as count FROM backups")?.count || 0;
+    return res.json({
+      operational: {
+        bookings: bookingsCount,
+        active_bookings: activeBookingsCount,
+        trip_status_logs: tripLogsCount,
+        payments: paymentsCount,
+        drivers: driversCount,
+        suppliers: suppliersCount,
+        vehicles: vehiclesCount
+      },
+      protected: {
+        users: usersCount,
+        settings: settingsCount,
+        audit_logs: auditLogsCount,
+        backups: backupsCount
+      }
+    });
+  } catch (err) {
+    console.error("Data summary error:", err);
+    return res.status(500).json({ error: "Failed to retrieve data summary: " + err.message });
+  }
+});
+router13.post("/fresh-start", requireAuth, requireRole("super_admin", "admin"), async (req, res) => {
+  const { password, confirmationPhrase, mode, categories } = req.body;
+  if (!confirmationPhrase || confirmationPhrase.trim() !== "RESET GULF TAXIS") {
+    return res.status(400).json({
+      error: 'Security confirmation failed. You must type exactly "RESET GULF TAXIS" to proceed.'
+    });
+  }
+  if (!password) {
+    return res.status(400).json({ error: "Administrator password is required to authorize Fresh Start." });
+  }
+  const currentUser = queryOne(
+    "SELECT password_hash, username, role FROM users WHERE id = ?",
+    [req.user?.id]
+  );
+  if (!currentUser || !bcrypt4.compareSync(password, currentUser.password_hash)) {
+    return res.status(401).json({ error: "Incorrect administrator password. Authentication failed." });
+  }
+  const toClear = {
+    bookings: false,
+    drivers: false,
+    suppliers: false,
+    vehicles: false,
+    payments: false
+  };
+  if (mode === "operational_reset") {
+    toClear.bookings = true;
+    toClear.payments = true;
+    if (categories?.drivers) toClear.drivers = true;
+    if (categories?.suppliers) toClear.suppliers = true;
+    if (categories?.vehicles) toClear.vehicles = true;
+  } else if (mode === "selective_reset") {
+    toClear.bookings = !!categories?.bookings;
+    toClear.drivers = !!categories?.drivers;
+    toClear.suppliers = !!categories?.suppliers;
+    toClear.vehicles = !!categories?.vehicles;
+    toClear.payments = !!categories?.payments;
+  } else {
+    return res.status(400).json({ error: "Invalid Fresh Start mode specified." });
+  }
+  const anySelected = Object.values(toClear).some(Boolean);
+  if (!anySelected) {
+    return res.status(400).json({ error: "Please select at least one data category to reset." });
+  }
+  let backupFilename = "";
+  try {
+    const db = await getDb();
+    persistDb();
+    if (!fs3.existsSync(BACKUPS_DIR3)) {
+      fs3.mkdirSync(BACKUPS_DIR3, { recursive: true });
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    backupFilename = `fresh_start_safety_backup_${timestamp}.sqlite`;
+    const destPath = path3.join(BACKUPS_DIR3, backupFilename);
+    const binaryData = db.export();
+    const buffer = Buffer.from(binaryData);
+    fs3.writeFileSync(destPath, buffer);
+    if (!fs3.existsSync(destPath) || fs3.statSync(destPath).size < 1e3) {
+      throw new Error("Safety backup verification failed: snapshot file is missing or corrupted.");
+    }
+    runSql(
+      `INSERT INTO backups (id, filename, size_bytes, created_at, status, type)
+       VALUES (?, ?, ?, ?, 'completed', 'automated')`,
+      ["bkp_fresh_start_" + Date.now(), backupFilename, buffer.length, (/* @__PURE__ */ new Date()).toISOString()]
+    );
+  } catch (backupErr) {
+    console.error("Fresh Start aborted due to backup error:", backupErr);
+    return res.status(500).json({
+      error: `Safety backup creation failed (${backupErr.message}). Fresh Start has been aborted with ZERO changes made to your database.`
+    });
+  }
+  const deletedCounts = {};
+  try {
+    const db = await getDb();
+    runTransaction(() => {
+      if (toClear.bookings) {
+        const bCount = queryOne("SELECT count(*) as count FROM bookings")?.count || 0;
+        const lCount = queryOne("SELECT count(*) as count FROM trip_status_logs")?.count || 0;
+        db.run("DELETE FROM trip_status_logs;");
+        db.run("DELETE FROM payments WHERE booking_id IS NOT NULL;");
+        db.run("DELETE FROM bookings;");
+        deletedCounts.bookings = bCount;
+        deletedCounts.trip_status_logs = lCount;
+      }
+      if (toClear.drivers) {
+        const dCount = queryOne("SELECT count(*) as count FROM drivers")?.count || 0;
+        db.run("DELETE FROM payments WHERE entity_type = 'driver_payment';");
+        db.run("UPDATE vehicles SET assigned_driver_id = NULL;");
+        db.run("UPDATE bookings SET driver_id = NULL;");
+        db.run("DELETE FROM drivers;");
+        deletedCounts.drivers = dCount;
+      }
+      if (toClear.suppliers) {
+        const sCount = queryOne("SELECT count(*) as count FROM suppliers")?.count || 0;
+        db.run("DELETE FROM payments WHERE entity_type = 'supplier_payment';");
+        db.run("UPDATE vehicles SET supplier_id = NULL;");
+        db.run("UPDATE bookings SET supplier_id = NULL;");
+        db.run("DELETE FROM suppliers;");
+        deletedCounts.suppliers = sCount;
+      }
+      if (toClear.vehicles) {
+        const vCount = queryOne("SELECT count(*) as count FROM vehicles")?.count || 0;
+        db.run("UPDATE drivers SET assigned_vehicle_id = NULL;");
+        db.run("UPDATE bookings SET vehicle_id = NULL;");
+        db.run("DELETE FROM vehicles;");
+        deletedCounts.vehicles = vCount;
+      }
+      if (toClear.payments) {
+        const pCount = queryOne("SELECT count(*) as count FROM payments")?.count || 0;
+        db.run("DELETE FROM payments;");
+        deletedCounts.payments = pCount;
+      }
+    });
+    const affectedCategories = Object.keys(toClear).filter((k) => toClear[k]);
+    recordAuditLog(
+      req.user?.id,
+      req.user?.full_name,
+      "RESET",
+      "system",
+      "fresh_start",
+      `Executed Fresh Start (${mode}). Cleared: ${affectedCategories.join(", ")}. Safety backup: ${backupFilename}`
+    );
+    return res.json({
+      success: true,
+      message: "Fresh Start completed successfully. Selected operational data has been cleared.",
+      backupFilename,
+      deletedCounts,
+      affectedCategories
+    });
+  } catch (txErr) {
+    console.error("Fresh Start transaction failed and rolled back:", txErr);
+    return res.status(500).json({
+      error: "Database transaction failed during reset. All changes have been completely rolled back. Error: " + txErr.message
+    });
+  }
+});
+var dataManagementRoutes_default = router13;
+
 // server.ts
 var app = express();
 var PORT = parseInt(process.env.PORT || "3000", 10);
@@ -3975,6 +4287,7 @@ app.use("/api/backups", backupRoutes_default);
 app.use("/api/users", userRoutes_default);
 app.use("/api/settings", settingsRoutes_default);
 app.use("/api/sync", syncRoutes_default);
+app.use("/api/data-management", dataManagementRoutes_default);
 app.get("/api/health", (req, res) => {
   res.json({
     status: "healthy",
@@ -3987,10 +4300,10 @@ app.get("/api/health", (req, res) => {
   });
 });
 app.get(["/Gulf_Taxis_Dispatch_Cloud_Complete.zip", "/api/download-package"], (req, res) => {
-  const publicZip = path3.resolve(process.cwd(), "public", "Gulf_Taxis_Dispatch_Cloud_Complete.zip");
-  const rootZip = path3.resolve(process.cwd(), "Gulf_Taxis_Dispatch_Cloud_Complete.zip");
-  const targetZip = fs3.existsSync(publicZip) ? publicZip : rootZip;
-  if (fs3.existsSync(targetZip)) {
+  const publicZip = path4.resolve(process.cwd(), "public", "Gulf_Taxis_Dispatch_Cloud_Complete.zip");
+  const rootZip = path4.resolve(process.cwd(), "Gulf_Taxis_Dispatch_Cloud_Complete.zip");
+  const targetZip = fs4.existsSync(publicZip) ? publicZip : rootZip;
+  if (fs4.existsSync(targetZip)) {
     res.setHeader("Content-Disposition", 'attachment; filename="Gulf_Taxis_Dispatch_Cloud_Complete.zip"');
     res.setHeader("Content-Type", "application/zip");
     return res.sendFile(targetZip);
@@ -4002,15 +4315,15 @@ async function performAutomatedBackup() {
   try {
     const db = await getDb();
     persistDb();
-    const backupDir = path3.resolve(process.cwd(), "data", "backups");
-    if (!fs3.existsSync(backupDir)) {
-      fs3.mkdirSync(backupDir, { recursive: true });
+    const backupDir = path4.resolve(process.cwd(), "data", "backups");
+    if (!fs4.existsSync(backupDir)) {
+      fs4.mkdirSync(backupDir, { recursive: true });
     }
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = `auto_backup_${timestamp}.sqlite`;
-    const dest = path3.join(backupDir, filename);
+    const dest = path4.join(backupDir, filename);
     const data = Buffer.from(db.export());
-    fs3.writeFileSync(dest, data);
+    fs4.writeFileSync(dest, data);
     runSql(
       `INSERT INTO backups (id, filename, size_bytes, created_at, status, type)
        VALUES (?, ?, ?, ?, 'completed', 'automated')`,
@@ -4025,8 +4338,8 @@ setInterval(performAutomatedBackup, BACKUP_INTERVAL_MS);
 app.all("/api/*", (req, res) => {
   res.status(404).json({ error: `API route ${req.method} ${req.originalUrl} not found` });
 });
-var distPath = path3.resolve(process.cwd(), "dist");
-var hasDist = fs3.existsSync(path3.join(distPath, "index.html"));
+var distPath = path4.resolve(process.cwd(), "dist");
+var hasDist = fs4.existsSync(path4.join(distPath, "index.html"));
 var isProduction = process.env.NODE_ENV === "production" || hasDist;
 if (!isProduction) {
   try {
@@ -4041,7 +4354,7 @@ if (!isProduction) {
     if (hasDist) {
       app.use(express.static(distPath));
       app.get("*", (req, res) => {
-        res.sendFile(path3.join(distPath, "index.html"));
+        res.sendFile(path4.join(distPath, "index.html"));
       });
     }
   }
@@ -4049,7 +4362,7 @@ if (!isProduction) {
   if (hasDist) {
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path3.join(distPath, "index.html"));
+      res.sendFile(path4.join(distPath, "index.html"));
     });
   } else {
     app.get("*", (req, res) => {

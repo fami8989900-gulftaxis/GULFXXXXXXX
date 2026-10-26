@@ -194,4 +194,64 @@ router.post('/:id/toggle-status', requireAuth, requireRole('super_admin', 'admin
   });
 });
 
+// DELETE /api/users/:id
+router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const target = queryOne(`SELECT id, username, email, full_name, role, is_active FROM users WHERE id = ?`, [id]);
+  if (!target) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+
+  // 1. Prevent users from deleting themselves
+  if (target.id === req.user?.id) {
+    return res.status(400).json({ error: 'You cannot delete your own active account.' });
+  }
+
+  // 2. Hierarchy rule: Only super_admin can delete another super_admin
+  if (target.role === 'super_admin' && req.user?.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Only a Super Administrator can delete Super Admin accounts.' });
+  }
+
+  // 3. Prevent deletion of the last active Super Administrator
+  if (target.role === 'super_admin') {
+    const superAdminCount = queryOne<{ count: number }>(
+      `SELECT count(*) as count FROM users WHERE role = 'super_admin' AND is_active = 1`
+    )?.count || 0;
+
+    if (superAdminCount <= 1) {
+      return res.status(400).json({
+        error: 'Cannot delete the last active Super Administrator. The system must always retain at least one active Super Admin.',
+      });
+    }
+  }
+
+  // 4. Never allow deleting the last account capable of managing the system
+  const totalAdminCount = queryOne<{ count: number }>(
+    `SELECT count(*) as count FROM users WHERE role IN ('super_admin', 'admin') AND is_active = 1`
+  )?.count || 0;
+
+  if (totalAdminCount <= 1 && (target.role === 'admin' || target.role === 'super_admin')) {
+    return res.status(400).json({
+      error: 'Cannot delete the last remaining administrative account capable of managing the system.',
+    });
+  }
+
+  // 5. Delete the user
+  runSql(`DELETE FROM users WHERE id = ?`, [id]);
+
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    'DELETE',
+    'user',
+    id,
+    `Permanently deleted staff user account: ${target.username} (${target.full_name}, ${target.role})`
+  );
+
+  return res.json({
+    success: true,
+    message: `User account @${target.username} (${target.full_name}) successfully deleted.`,
+  });
+});
+
 export default router;

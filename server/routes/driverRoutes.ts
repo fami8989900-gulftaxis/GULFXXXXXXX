@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { queryAll, queryOne, runSql } from '../db.js';
-import { requireAuth, requirePermission, recordAuditLog, AuthenticatedRequest } from '../auth.js';
+import { requireAuth, requireRole, requirePermission, recordAuditLog, AuthenticatedRequest } from '../auth.js';
 
 const router = Router();
 
@@ -341,6 +341,53 @@ router.get('/:id/statement', requireAuth, (req: AuthenticatedRequest, res: Respo
       totalPaid: entries.reduce((s, e) => s + e.paid, 0),
       closingBalance: seqBalance,
     },
+  });
+});
+
+// DELETE /api/drivers/:id
+router.delete('/:id', requireAuth, requireRole('super_admin', 'admin'), (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const existing = queryOne(`SELECT * FROM drivers WHERE id = ?`, [id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Driver not found.' });
+  }
+
+  // Check dependent records
+  const bookingsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM bookings WHERE driver_id = ?`, [id])?.count || 0;
+  const paymentsCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM payments WHERE entity_type = 'driver_payment' AND entity_id = ?`, [id])?.count || 0;
+
+  if (bookingsCount > 0 || paymentsCount > 0) {
+    return res.status(400).json({
+      hasDependencies: true,
+      counts: {
+        bookings: bookingsCount,
+        payments: paymentsCount,
+      },
+      error: `Cannot permanently delete chauffeur '${existing.full_name}' because they have active records: ` +
+        `[${bookingsCount} booking(s), ${paymentsCount} payment transaction(s)]. ` +
+        `Please deactivate this driver instead to preserve trip records and financial audits.`,
+    });
+  }
+
+  // Clear vehicle assignment if any
+  if (existing.assigned_vehicle_id) {
+    runSql(`UPDATE vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = ?`, [id]);
+  }
+
+  runSql(`DELETE FROM drivers WHERE id = ?`, [id]);
+
+  recordAuditLog(
+    req.user?.id,
+    req.user?.full_name,
+    'DELETE',
+    'driver',
+    id,
+    `Permanently deleted driver ${existing.full_name} (${existing.driver_code})`
+  );
+
+  return res.json({
+    success: true,
+    message: `Chauffeur '${existing.full_name}' (${existing.driver_code}) successfully deleted.`,
   });
 });
 

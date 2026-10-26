@@ -19,14 +19,19 @@ import {
   FileCode,
   Terminal,
   Lock,
-  Edit2
+  Edit2,
+  Trash2,
+  AlertTriangle,
+  RotateCcw,
+  KeyRound,
+  ShieldAlert
 } from 'lucide-react';
 
 export const SettingsPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const { syncVersion } = useSync();
 
-  const [activeTab, setActiveTab] = useState<'company' | 'users' | 'backup' | 'audit' | 'deployment'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'users' | 'backup' | 'audit' | 'deployment' | 'fresh-start'>('company');
 
   // Company Profile state
   const [companyProfile, setCompanyProfile] = useState<any>({
@@ -109,11 +114,114 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  // Delete User State
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [deleteUserLoading, setDeleteUserLoading] = useState(false);
+  const [deleteUserError, setDeleteUserError] = useState<string | null>(null);
+  const [deleteUserSuccess, setDeleteUserSuccess] = useState<string | null>(null);
+
+  const handleOpenDeleteUser = (u: User) => {
+    setUserToDelete(u);
+    setDeleteUserError(null);
+    setDeleteUserSuccess(null);
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!userToDelete) return;
+    setDeleteUserLoading(true);
+    setDeleteUserError(null);
+    try {
+      const res = await api.deleteUser(userToDelete.id);
+      setDeleteUserSuccess(res.message || 'User deleted successfully.');
+      setTimeout(() => {
+        setUserToDelete(null);
+        setDeleteUserSuccess(null);
+        fetchUsers();
+      }, 1000);
+    } catch (err: any) {
+      setDeleteUserError(err.message || 'Failed to delete user account.');
+    } finally {
+      setDeleteUserLoading(false);
+    }
+  };
+
+  // Fresh Start State
+  const [dataSummary, setDataSummary] = useState<any | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [freshStartMode, setFreshStartMode] = useState<'operational_reset' | 'selective_reset'>('operational_reset');
+  const [resetCategories, setResetCategories] = useState({
+    bookings: true,
+    drivers: false,
+    suppliers: false,
+    vehicles: false,
+    payments: true,
+  });
+  const [adminPassword, setAdminPassword] = useState('');
+  const [confirmationPhrase, setConfirmationPhrase] = useState('');
+  const [safetyCheckConfirmed, setSafetyCheckConfirmed] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<any | null>(null);
+
+  const fetchDataSummary = async () => {
+    setSummaryLoading(true);
+    try {
+      const res = await api.getDataSummary();
+      setDataSummary(res);
+    } catch (err: any) {
+      console.error('Failed to load data summary:', err);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleExecuteFreshStart = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (confirmationPhrase.trim() !== 'RESET GULF TAXIS') {
+      setResetError('Security confirmation failed: You must type exactly "RESET GULF TAXIS".');
+      return;
+    }
+    if (!adminPassword) {
+      setResetError('Please enter your administrator password to authorize this action.');
+      return;
+    }
+    if (!safetyCheckConfirmed) {
+      setResetError('Please acknowledge the pre-reset safety backup confirmation.');
+      return;
+    }
+
+    setResetLoading(true);
+    setResetError(null);
+    setResetSuccess(null);
+
+    try {
+      const res = await api.executeFreshStart({
+        mode: freshStartMode,
+        password: adminPassword,
+        confirmationPhrase: confirmationPhrase.trim(),
+        categories: resetCategories,
+      });
+
+      setResetSuccess(res);
+      setAdminPassword('');
+      setConfirmationPhrase('');
+      setSafetyCheckConfirmed(false);
+      fetchDataSummary();
+      fetchUsers();
+      fetchBackups();
+    } catch (err: any) {
+      setResetError(err.message || 'Fresh Start execution failed.');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchSettings();
     if (activeTab === 'users') fetchUsers();
     if (activeTab === 'backup') fetchBackups();
     if (activeTab === 'audit') fetchAuditLogs();
+    if (activeTab === 'fresh-start') fetchDataSummary();
   }, [syncVersion, activeTab]);
 
   const handleSaveCompanyProfile = async (e: React.FormEvent) => {
@@ -280,6 +388,18 @@ export const SettingsPage: React.FC = () => {
           >
             🌐 Cloud Hosting
           </button>
+          {hasRole('super_admin', 'admin') && (
+            <button
+              onClick={() => setActiveTab('fresh-start')}
+              className={`px-3.5 py-2 min-h-[38px] rounded-xl transition-all cursor-pointer text-sm ${
+                activeTab === 'fresh-start'
+                  ? 'bg-rose-50 text-rose-700 border border-rose-200 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-rose-700'
+              }`}
+            >
+              🧹 Fresh Start
+            </button>
+          )}
         </div>
       </div>
 
@@ -483,16 +603,25 @@ export const SettingsPage: React.FC = () => {
                           Edit
                         </button>
                         {u.id !== user?.id && (
-                          <button
-                            onClick={() => handleToggleUserStatus(u)}
-                            className={`px-3 py-1.5 min-h-[34px] rounded-lg text-sm font-semibold cursor-pointer transition-colors ${
-                              u.is_active === 1
-                                ? 'text-rose-600 hover:bg-rose-50'
-                                : 'text-emerald-600 hover:bg-emerald-50'
-                            }`}
-                          >
-                            {u.is_active === 1 ? 'Deactivate' : 'Activate'}
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleToggleUserStatus(u)}
+                              className={`px-3 py-1.5 min-h-[34px] rounded-lg text-sm font-semibold cursor-pointer transition-colors ${
+                                u.is_active === 1
+                                  ? 'text-rose-600 hover:bg-rose-50'
+                                  : 'text-emerald-600 hover:bg-emerald-50'
+                              }`}
+                            >
+                              {u.is_active === 1 ? 'Deactivate' : 'Activate'}
+                            </button>
+                            <button
+                              onClick={() => handleOpenDeleteUser(u)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer hover:bg-rose-50 transition-colors"
+                              title="Delete User Account"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -725,6 +854,407 @@ pm2 save && pm2 startup`}
               <p className="text-sm">
                 In Railway, set Build Command to <code className="font-mono font-bold bg-white px-2 py-0.5 rounded text-xs">npm run build</code> and Start Command to <code className="font-mono font-bold bg-white px-2 py-0.5 rounded text-xs">npm start</code>. Attach a persistent volume to <code className="font-mono font-bold bg-white px-2 py-0.5 rounded text-xs">/var/www/data</code> to retain data across deployments.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: Data Management & Fresh Start */}
+      {activeTab === 'fresh-start' && hasRole('super_admin', 'admin') && (
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-rose-200 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-rose-100">
+            <div>
+              <h2 className="text-lg sm:text-[20px] font-bold text-slate-900 flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-rose-600" />
+                <span>Data Management & Fresh Start Reset</span>
+              </h2>
+              <p className="text-[13.5px] text-slate-500 mt-1">
+                Safely clear operational records to start production fresh, while strictly protecting user accounts, settings, and backups.
+              </p>
+            </div>
+            <button
+              onClick={fetchDataSummary}
+              disabled={summaryLoading}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${summaryLoading ? 'animate-spin' : ''}`} />
+              <span>Refresh Record Counts</span>
+            </button>
+          </div>
+
+          {/* Protected Data Guarantee Banner */}
+          <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-2">
+            <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>Zero-Data-Loss Protection Policy for System Infrastructure</span>
+            </div>
+            <p className="text-xs text-emerald-700 leading-relaxed">
+              The Fresh Start tool <strong>never</strong> touches user credentials, administrator logins, role permissions, pricing policies, company profile, database schema, or past backup snapshots.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-xs">
+              <div className="bg-white/80 px-2.5 py-1.5 rounded-lg border border-emerald-200 text-emerald-900 flex justify-between">
+                <span>Staff Logins:</span>
+                <span className="font-bold">{dataSummary?.protected?.users || 0} (Preserved)</span>
+              </div>
+              <div className="bg-white/80 px-2.5 py-1.5 rounded-lg border border-emerald-200 text-emerald-900 flex justify-between">
+                <span>Settings:</span>
+                <span className="font-bold">{dataSummary?.protected?.settings || 0} (Preserved)</span>
+              </div>
+              <div className="bg-white/80 px-2.5 py-1.5 rounded-lg border border-emerald-200 text-emerald-900 flex justify-between">
+                <span>Audit Logs:</span>
+                <span className="font-bold">{dataSummary?.protected?.audit_logs || 0} (Preserved)</span>
+              </div>
+              <div className="bg-white/80 px-2.5 py-1.5 rounded-lg border border-emerald-200 text-emerald-900 flex justify-between">
+                <span>Snapshots:</span>
+                <span className="font-bold">{dataSummary?.protected?.backups || 0} (Preserved)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Reset Mode Selection */}
+          <div className="space-y-4">
+            <label className="block text-sm font-bold text-slate-800">1. Select Reset Strategy</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div
+                onClick={() => setFreshStartMode('operational_reset')}
+                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                  freshStartMode === 'operational_reset'
+                    ? 'border-rose-500 bg-rose-50/50 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-slate-900 text-sm">Mode A: Operational Reset (Recommended)</span>
+                  <input
+                    type="radio"
+                    name="reset_mode"
+                    checked={freshStartMode === 'operational_reset'}
+                    onChange={() => setFreshStartMode('operational_reset')}
+                    className="text-rose-600 focus:ring-rose-500"
+                  />
+                </div>
+                <p className="text-xs text-slate-600">
+                  Clears all test bookings, active trips, and booking payment vouchers. Driver and supplier registries remain preserved unless explicitly checked.
+                </p>
+              </div>
+
+              <div
+                onClick={() => setFreshStartMode('selective_reset')}
+                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                  freshStartMode === 'selective_reset'
+                    ? 'border-rose-500 bg-rose-50/50 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-slate-900 text-sm">Mode B: Granular Selective Reset</span>
+                  <input
+                    type="radio"
+                    name="reset_mode"
+                    checked={freshStartMode === 'selective_reset'}
+                    onChange={() => setFreshStartMode('selective_reset')}
+                    className="text-rose-600 focus:ring-rose-500"
+                  />
+                </div>
+                <p className="text-xs text-slate-600">
+                  Manually select exactly which business data categories to purge with full dependency warnings.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Category Selection Checklist */}
+          <div className="space-y-3">
+            <label className="block text-sm font-bold text-slate-800">
+              2. Target Operational Categories & Live Record Counts
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* Bookings */}
+              <label
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer text-xs font-semibold ${
+                  resetCategories.bookings ? 'bg-rose-50 border-rose-300 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={resetCategories.bookings}
+                    onChange={(e) => setResetCategories({ ...resetCategories, bookings: e.target.checked })}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>🚖 Bookings & Trip History Logs</span>
+                </div>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold">
+                  {dataSummary?.operational?.bookings || 0} bookings
+                </span>
+              </label>
+
+              {/* Payments */}
+              <label
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer text-xs font-semibold ${
+                  resetCategories.payments ? 'bg-rose-50 border-rose-300 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={resetCategories.payments}
+                    onChange={(e) => setResetCategories({ ...resetCategories, payments: e.target.checked })}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>💳 Customer Payments & Receipts</span>
+                </div>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold">
+                  {dataSummary?.operational?.payments || 0} payments
+                </span>
+              </label>
+
+              {/* Drivers */}
+              <label
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer text-xs font-semibold ${
+                  resetCategories.drivers ? 'bg-rose-50 border-rose-300 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={resetCategories.drivers}
+                    onChange={(e) => setResetCategories({ ...resetCategories, drivers: e.target.checked })}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>🧑‍✈️ Fleet Drivers & Payout Records</span>
+                </div>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold">
+                  {dataSummary?.operational?.drivers || 0} drivers
+                </span>
+              </label>
+
+              {/* Suppliers */}
+              <label
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer text-xs font-semibold ${
+                  resetCategories.suppliers ? 'bg-rose-50 border-rose-300 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={resetCategories.suppliers}
+                    onChange={(e) => setResetCategories({ ...resetCategories, suppliers: e.target.checked })}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>🏢 Fleet Partner Suppliers & Balances</span>
+                </div>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold">
+                  {dataSummary?.operational?.suppliers || 0} suppliers
+                </span>
+              </label>
+
+              {/* Vehicles */}
+              <label
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer text-xs font-semibold ${
+                  resetCategories.vehicles ? 'bg-rose-50 border-rose-300 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={resetCategories.vehicles}
+                    onChange={(e) => setResetCategories({ ...resetCategories, vehicles: e.target.checked })}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>🚗 Fleet Vehicles List</span>
+                </div>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold">
+                  {dataSummary?.operational?.vehicles || 0} vehicles
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Safety Controls Form */}
+          <form onSubmit={handleExecuteFreshStart} className="p-5 bg-rose-50/70 border border-rose-200 rounded-2xl space-y-4">
+            <div className="flex items-center gap-2 text-rose-900 font-bold text-sm">
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+              <span>3. Mandatory Dual-Verification Security Authorization</span>
+            </div>
+
+            <p className="text-xs text-rose-800">
+              Before clearing any records, the server will automatically create and verify a standalone snapshot in <code className="font-mono bg-white px-1.5 py-0.5 rounded">data/backups/</code>. If the snapshot fails, the reset cancels automatically.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Administrator Password Re-Authentication *
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    placeholder="Enter current admin password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    className="w-full pl-9 pr-3.5 py-2 min-h-[40px] bg-white border border-rose-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Type <span className="font-mono text-rose-700 bg-white px-1 rounded">RESET GULF TAXIS</span> to Confirm *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="RESET GULF TAXIS"
+                  value={confirmationPhrase}
+                  onChange={(e) => setConfirmationPhrase(e.target.value)}
+                  className="w-full px-3.5 py-2 min-h-[40px] bg-white border border-rose-300 rounded-xl text-slate-900 text-sm font-mono tracking-wide focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+            </div>
+
+            <label className="flex items-start gap-2.5 cursor-pointer pt-2">
+              <input
+                type="checkbox"
+                required
+                checked={safetyCheckConfirmed}
+                onChange={(e) => setSafetyCheckConfirmed(e.target.checked)}
+                className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4 mt-0.5"
+              />
+              <span className="text-xs text-slate-700 font-semibold leading-relaxed">
+                I understand that selected business records will be purged, that an automated pre-reset SQLite snapshot will be created in data/backups, and that all user accounts and audit logs will remain safe.
+              </span>
+            </label>
+
+            {resetError && (
+              <div className="p-3 bg-rose-100 border border-rose-300 rounded-xl text-rose-900 text-xs flex items-start gap-2 font-medium">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {resetSuccess && (
+              <div className="p-4 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-950 text-xs space-y-1.5 font-sans">
+                <div className="flex items-center gap-2 font-bold text-emerald-900 text-sm">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Fresh Start Successful! Operational Data Cleared.</span>
+                </div>
+                <p>
+                  Safety snapshot stored: <strong className="font-mono">{resetSuccess.backupFilename}</strong>
+                </p>
+                <div className="font-mono text-[11px] bg-white/70 p-2 rounded border border-emerald-200">
+                  Cleared: {JSON.stringify(resetSuccess.deletedCounts || {})}
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="submit"
+                disabled={resetLoading || confirmationPhrase.trim() !== 'RESET GULF TAXIS' || !adminPassword || !safetyCheckConfirmed}
+                className="px-6 py-2.5 min-h-[42px] bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow cursor-pointer transition-all flex items-center gap-2"
+              >
+                <RotateCcw className={`w-4 h-4 ${resetLoading ? 'animate-spin' : ''}`} />
+                <span>{resetLoading ? 'Creating Backup & Clearing Data...' : 'Execute Fresh Start Reset'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Delete User Account Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center gap-3 text-rose-600 mb-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Delete Staff User Account</h3>
+                <p className="text-xs text-slate-500 font-mono">@{userToDelete.username}</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1 mb-4 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Full Name:</span>
+                <span className="font-bold text-slate-900">{userToDelete.full_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Username:</span>
+                <span className="font-mono text-slate-800">@{userToDelete.username}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">System Role:</span>
+                <span className="font-bold capitalize bg-slate-200 px-2 py-0.5 rounded text-slate-800">
+                  {userToDelete.role.replace('_', ' ')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Email:</span>
+                <span className="text-slate-800">{userToDelete.email}</span>
+              </div>
+            </div>
+
+            {userToDelete.id === user?.id ? (
+              <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl mb-4 text-xs text-rose-900">
+                <p className="font-bold">Self-Deletion Prohibited</p>
+                <p>You cannot delete your own active administrator account.</p>
+              </div>
+            ) : userToDelete.role === 'super_admin' ? (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl mb-4 text-xs text-amber-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Super Administrator Account</span>
+                </div>
+                <p>
+                  Deleting a Super Administrator requires at least one other active Super Admin account to manage the system.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                Are you sure you want to delete staff account <strong>@{userToDelete.username} ({userToDelete.full_name})</strong>? Their access will be immediately revoked. All past bookings, dispatch history, and audit trails logged by this user will be preserved.
+              </p>
+            )}
+
+            {deleteUserError && (
+              <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-rose-800 text-xs mb-4 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{deleteUserError}</span>
+              </div>
+            )}
+
+            {deleteUserSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-800 text-xs mb-4 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{deleteUserSuccess}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                disabled={deleteUserLoading}
+                className="px-4 py-2 min-h-[38px] bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              {userToDelete.id !== user?.id && (
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteUser}
+                  disabled={deleteUserLoading}
+                  className="px-4 py-2 min-h-[38px] bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{deleteUserLoading ? 'Deleting User...' : 'Confirm Delete User'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

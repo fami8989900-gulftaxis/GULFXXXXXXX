@@ -18,6 +18,7 @@ import backupRoutes from './server/routes/backupRoutes.js';
 import userRoutes from './server/routes/userRoutes.js';
 import settingsRoutes from './server/routes/settingsRoutes.js';
 import syncRoutes from './server/routes/syncRoutes.js';
+import dataManagementRoutes from './server/routes/dataManagementRoutes.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -43,6 +44,7 @@ app.use('/api/backups', backupRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/data-management', dataManagementRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

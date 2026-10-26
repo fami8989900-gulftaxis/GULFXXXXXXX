@@ -20,7 +20,9 @@ import {
   Edit2,
   Eye,
   History,
-  Download
+  Download,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -61,6 +63,57 @@ export const DriversPage: React.FC = () => {
   const [historyDriver, setHistoryDriver] = useState<Driver | null>(null);
   const [driverTrips, setDriverTrips] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Delete Driver State
+  const [driverToDelete, setDriverToDelete] = useState<any | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
+
+  const handleOpenDelete = (d: any) => {
+    setDriverToDelete(d);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!driverToDelete) return;
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      const res = await api.deleteDriver(driverToDelete.id);
+      setDeleteSuccess(res.message || 'Driver deleted successfully.');
+      setTimeout(() => {
+        setDriverToDelete(null);
+        setDeleteSuccess(null);
+        fetchDrivers();
+      }, 1000);
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete driver.');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleDeactivateInstead = async () => {
+    if (!driverToDelete) return;
+    setDeactivateLoading(true);
+    setDeleteError(null);
+    try {
+      await api.updateDriver(driverToDelete.id, { is_active: 0 });
+      setDeleteSuccess(`Driver ${driverToDelete.full_name} has been deactivated. They will not be assigned to new bookings.`);
+      setTimeout(() => {
+        setDriverToDelete(null);
+        setDeleteSuccess(null);
+        fetchDrivers();
+      }, 1200);
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to deactivate driver.');
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
 
   const fetchDrivers = async () => {
     setLoading(true);
@@ -319,6 +372,13 @@ export const DriversPage: React.FC = () => {
                           title="Edit Chauffeur Details"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleOpenDelete(d)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer hover:bg-rose-50 transition-colors"
+                          title="Delete Chauffeur"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -593,6 +653,110 @@ export const DriversPage: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Driver Modal */}
+      {driverToDelete && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center gap-3 text-rose-600 mb-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Delete Fleet Chauffeur</h3>
+                <p className="text-xs text-slate-500 font-mono">{driverToDelete.driver_code}</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1 mb-4 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Chauffeur Name:</span>
+                <span className="font-bold text-slate-900">{driverToDelete.full_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Mobile Phone:</span>
+                <span className="font-mono text-slate-800">{driverToDelete.mobile}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Completed Trips:</span>
+                <span className="font-bold text-slate-900">{driverToDelete.completed_trips_count || 0} trip(s)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Current Balance:</span>
+                <span className="font-bold font-mono text-slate-900">
+                  {driverToDelete.current_balance?.toLocaleString() || 0} {driverToDelete.currency || 'SAR'}
+                </span>
+              </div>
+            </div>
+
+            {/* If driver has linked trips or non-zero balance, warn and offer Deactivate */}
+            {((driverToDelete.completed_trips_count > 0 || driverToDelete.active_trips_count > 0) || (driverToDelete.current_balance && Math.abs(driverToDelete.current_balance) > 0)) ? (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl mb-4 text-xs space-y-2 text-amber-900">
+                <div className="flex items-center gap-2 font-bold text-amber-800">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Unsafe Deletion Warning</span>
+                </div>
+                <p>
+                  This chauffeur has <strong>{(driverToDelete.completed_trips_count || 0) + (driverToDelete.active_trips_count || 0)} associated booking trips</strong> and payment records. Permanent deletion is blocked to prevent corrupting past financial logs and trip reports.
+                </p>
+                <p className="font-semibold text-amber-800">
+                  Recommended: Deactivate this driver instead. Deactivating immediately removes them from future booking dispatch lists while preserving all completed records.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600 mb-4">
+                Are you sure you want to permanently delete chauffeur <strong>{driverToDelete.full_name}</strong>? This driver has no dependent trips or transactions. This action cannot be undone.
+              </p>
+            )}
+
+            {deleteError && (
+              <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-rose-800 text-xs mb-4 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            {deleteSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-800 text-xs mb-4 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{deleteSuccess}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDriverToDelete(null)}
+                disabled={deleteLoading || deactivateLoading}
+                className="px-4 py-2 min-h-[38px] bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              {((driverToDelete.completed_trips_count > 0 || driverToDelete.active_trips_count > 0) || (driverToDelete.current_balance && Math.abs(driverToDelete.current_balance) > 0)) ? (
+                <button
+                  type="button"
+                  onClick={handleDeactivateInstead}
+                  disabled={deactivateLoading}
+                  className="px-4 py-2 min-h-[38px] bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  {deactivateLoading ? 'Deactivating...' : 'Deactivate Driver Instead'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={deleteLoading}
+                  className="px-4 py-2 min-h-[38px] bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{deleteLoading ? 'Deleting...' : 'Confirm Delete'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

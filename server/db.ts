@@ -66,6 +66,25 @@ export function runSql(sql: string, params: any[] = []): void {
   persistDb();
 }
 
+// Helper to execute operations within a database transaction with automatic rollback
+export function runTransaction<T>(callback: () => T): T {
+  if (!dbInstance) throw new Error('Database not initialized');
+  dbInstance.run('BEGIN TRANSACTION;');
+  try {
+    const result = callback();
+    dbInstance.run('COMMIT;');
+    persistDb();
+    return result;
+  } catch (err) {
+    try {
+      dbInstance.run('ROLLBACK;');
+    } catch (rbErr) {
+      console.error('Failed to rollback transaction:', rbErr);
+    }
+    throw err;
+  }
+}
+
 // Helper to query multiple rows as objects
 export function queryAll<T = any>(sql: string, params: any[] = []): T[] {
   if (!dbInstance) throw new Error('Database not initialized');

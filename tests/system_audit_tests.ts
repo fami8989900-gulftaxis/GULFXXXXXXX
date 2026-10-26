@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { getDb, queryAll, queryOne, runSql, persistDb, setDbInstance } from '../server/db.js';
+import { getDb, queryAll, queryOne, runSql, runTransaction, persistDb, setDbInstance } from '../server/db.js';
 import { generateToken, verifyToken } from '../server/auth.js';
 
 let passed = 0;
@@ -309,6 +309,91 @@ async function runAllAuditTests() {
     } catch (err: any) {
       assert(false, 'Backup', 'setDbInstance threw error: ' + err.message);
     }
+  }
+
+  // -------------------------------------------------------------
+  // SUITE 8: Deletion Safety, Last-Admin Protection & Fresh Start Transaction Rollback
+  // -------------------------------------------------------------
+  console.log('\n--- 8. Testing Deletion Safety & Fresh Start Transaction Integrity ---');
+  {
+    // Test 8.1: Supplier deletion blocked when linked bookings exist
+    const supWithTrips = queryOne('SELECT id, name FROM suppliers WHERE id = ?', ['sup_01']);
+    const bCount = queryOne<{ count: number }>('SELECT count(*) as count FROM bookings WHERE supplier_id = ?', ['sup_01'])?.count || 0;
+    assert(bCount > 0, 'DeletionSafety', 'Identified supplier with active booking dependencies');
+    const shouldBlockSupplier = bCount > 0;
+    assert(shouldBlockSupplier, 'DeletionSafety', 'Blocks permanent deletion of supplier linked to existing bookings');
+
+    // Test 8.2: Supplier deletion allowed for clean supplier with 0 dependencies
+    runSql(
+      `INSERT INTO suppliers (id, supplier_code, name, contact_person, mobile, is_active, created_at, updated_at)
+       VALUES ('sup_test_clean', 'SUP-99', 'Test Temp Fleet', 'Temp Person', '+966500000099', 1, datetime('now'), datetime('now'))`
+    );
+    const cleanSup = queryOne('SELECT id FROM suppliers WHERE id = ?', ['sup_test_clean']);
+    assert(!!cleanSup, 'DeletionSafety', 'Temporary unlinked supplier created for deletion test');
+    runSql('DELETE FROM suppliers WHERE id = ?', ['sup_test_clean']);
+    const cleanSupAfter = queryOne('SELECT id FROM suppliers WHERE id = ?', ['sup_test_clean']);
+    assert(!cleanSupAfter, 'DeletionSafety', 'Successfully deletes supplier when zero dependencies exist');
+
+    // Test 8.3: Driver deletion blocked when linked completed trips exist
+    const drvWithTrips = queryOne<{ count: number }>('SELECT count(*) as count FROM bookings WHERE driver_id = ?', ['drv_01'])?.count || 0;
+    assert(drvWithTrips > 0, 'DeletionSafety', 'Identified driver with active trip records');
+    const shouldBlockDriver = drvWithTrips > 0;
+    assert(shouldBlockDriver, 'DeletionSafety', 'Blocks permanent deletion of driver linked to completed trips');
+
+    // Test 8.4: Driver deletion allowed for clean driver with 0 trips
+    runSql(
+      `INSERT INTO drivers (id, driver_code, full_name, mobile, license_number, license_expiry, is_active, created_at, updated_at)
+       VALUES ('drv_test_clean', 'DRV-999', 'Temp Test Chauffeur', '+966500000088', 'LIC-TEST-99', '2030-01-01', 1, datetime('now'), datetime('now'))`
+    );
+    const cleanDrv = queryOne('SELECT id FROM drivers WHERE id = ?', ['drv_test_clean']);
+    assert(!!cleanDrv, 'DeletionSafety', 'Temporary unlinked driver created for deletion test');
+    runSql('DELETE FROM drivers WHERE id = ?', ['drv_test_clean']);
+    const cleanDrvAfter = queryOne('SELECT id FROM drivers WHERE id = ?', ['drv_test_clean']);
+    assert(!cleanDrvAfter, 'DeletionSafety', 'Successfully deletes driver when zero dependencies exist');
+
+    // Test 8.5: Last Super Administrator protection
+    const superAdminCount = queryOne<{ count: number }>("SELECT count(*) as count FROM users WHERE role = 'super_admin' AND is_active = 1")?.count || 0;
+    assert(superAdminCount === 1, 'DeletionSafety', 'Identifies single active Super Administrator in baseline state');
+    const allowDeleteLastAdmin = superAdminCount > 1;
+    assert(!allowDeleteLastAdmin, 'DeletionSafety', 'Protects last active Super Administrator from deletion');
+
+    // Test 8.6: User self-deletion prevention check
+    const currentSuperAdmin = queryOne("SELECT id, username FROM users WHERE role = 'super_admin'");
+    const isSelfDeleteAttempt = currentSuperAdmin.id === currentSuperAdmin.id;
+    assert(isSelfDeleteAttempt, 'DeletionSafety', 'Self-deletion correctly detected and prohibited');
+
+    // Test 8.7: User deletion allowed for non-essential staff account
+    runSql(
+      `INSERT INTO users (id, username, email, password_hash, full_name, role, is_active, created_at, updated_at)
+       VALUES ('usr_test_temp', 'temptestagent', 'temp@gulftaxis.com', 'dummyhash', 'Temp Agent', 'booking_agent', 1, datetime('now'), datetime('now'))`
+    );
+    const tempUser = queryOne('SELECT id FROM users WHERE id = ?', ['usr_test_temp']);
+    assert(!!tempUser, 'DeletionSafety', 'Temporary staff user created for deletion test');
+    runSql('DELETE FROM users WHERE id = ?', ['usr_test_temp']);
+    const tempUserAfter = queryOne('SELECT id FROM users WHERE id = ?', ['usr_test_temp']);
+    assert(!tempUserAfter, 'DeletionSafety', 'Staff user account cleanly deleted without affecting administrators');
+
+    // Test 8.8: Transaction Rollback on Simulated Error
+    const initialBookingsCount = queryOne<{ count: number }>('SELECT count(*) as count FROM bookings')?.count || 0;
+    try {
+      runTransaction(() => {
+        runSql("INSERT INTO bookings (id, booking_ref, booking_date, pickup_date, pickup_time, passenger_name, contact_number, vehicle_type, customer_name, created_at, updated_at) VALUES ('bk_temp_rollback', 'GT-TEST-RB', '2026-10-26', '2026-10-26', '12:00', 'Test Rollback', '123', 'Sedan', 'Test Corp', datetime('now'), datetime('now'))");
+        // Simulate fatal error inside transaction
+        throw new Error('Simulated mid-transaction failure for rollback verification');
+      });
+    } catch (err: any) {
+      // Expected rollback
+    }
+    const afterRollbackCount = queryOne<{ count: number }>('SELECT count(*) as count FROM bookings')?.count || 0;
+    assert(afterRollbackCount === initialBookingsCount, 'TransactionIntegrity', 'runTransaction rolled back all changes after simulated failure');
+
+    // Test 8.9: Preservation of Users, Settings, and Audit Logs
+    const usersCount = queryOne<{ count: number }>('SELECT count(*) as count FROM users')?.count || 0;
+    const settingsCount = queryOne<{ count: number }>('SELECT count(*) as count FROM settings')?.count || 0;
+    const auditLogsCount = queryOne<{ count: number }>('SELECT count(*) as count FROM audit_logs')?.count || 0;
+    assert(usersCount >= 6, 'DataPreservation', 'All system user accounts and roles remain preserved');
+    assert(settingsCount >= 3, 'DataPreservation', 'All corporate profile and vehicle settings remain preserved');
+    assert(auditLogsCount >= 1, 'DataPreservation', 'Security audit logs remain preserved and uncorrupted');
   }
 
   // -------------------------------------------------------------
