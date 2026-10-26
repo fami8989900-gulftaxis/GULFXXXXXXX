@@ -50,6 +50,8 @@ export const api = {
     apiRequest('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   changePassword: (passwords: any) =>
     apiRequest('/auth/change-password', { method: 'POST', body: JSON.stringify(passwords) }),
+  resetAdminCredentials: () =>
+    apiRequest('/auth/reset-admin-credentials', { method: 'POST' }),
 
   // Bookings
   getBookings: (params: Record<string, any> = {}) => {

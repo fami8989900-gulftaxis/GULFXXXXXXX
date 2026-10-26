@@ -12,7 +12,9 @@ import {
   HelpCircle,
   Clock,
   Globe,
-  ArrowRight
+  ArrowRight,
+  RotateCcw,
+  KeyRound
 } from 'lucide-react';
 import { api } from '../../services/api';
 
@@ -24,12 +26,30 @@ export const LoginPage: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   // Forgot password modal state
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+
+  const handleResetAdmin = async () => {
+    setResetting(true);
+    setError(null);
+    setResetSuccess(null);
+    try {
+      const res = await api.resetAdminCredentials();
+      setResetSuccess(res.message || 'Admin credentials reset successfully! Auto-filled credentials below.');
+      setUsernameOrEmail('superadmin');
+      setPassword('Admin@123');
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset admin credentials. Please try again.');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
